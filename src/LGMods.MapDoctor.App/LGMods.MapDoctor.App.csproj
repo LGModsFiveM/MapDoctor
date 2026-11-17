@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\LGMods.MapDoctor.Core\LGMods.MapDoctor.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>LGModsMapDoctor</AssemblyName>
+    <Product>LGMods Map Doctor</Product>
+    <Company>LGMods</Company>
+    <Version>0.1.0</Version>
+    <ApplicationIcon>Assets/app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets/app.ico" />
+    <Resource Include="Assets/app.png" />
+    <Resource Include="Assets/logo.png" />
+  </ItemGroup>
+
+</Project>

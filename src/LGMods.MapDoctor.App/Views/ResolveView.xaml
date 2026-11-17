@@ -1,0 +1,388 @@
+<UserControl x:Class="LGMods.MapDoctor.App.Views.ResolveView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:LGMods.MapDoctor.App.ViewModels">
+    <UserControl.InputBindings>
+        <KeyBinding Key="Escape" Command="{Binding CancelCommand}" />
+    </UserControl.InputBindings>
+
+    <UserControl.Resources>
+        <vm:StepNumberConverter x:Key="StepNumber" />
+        <!-- One clash: what players notice, which map should show, and exactly what that does. -->
+        <DataTemplate x:Key="GroupTemplate" DataType="{x:Type vm:ResolveGroup}">
+            <Border Style="{StaticResource Card}" Margin="0,0,0,12" Padding="20,16,20,14">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Ellipse Width="8" Height="8" Fill="{Binding DotBrush}" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,7,0,0" />
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Style="{StaticResource H2}" Text="{Binding Title}" TextWrapping="Wrap" />
+                            <TextBlock Style="{StaticResource Small}" Text="{Binding With}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Margin="16,0,0,0">
+
+                        <TextBlock Text="Which map should show here?" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" Margin="0,14,0,8" />
+                        <ItemsControl ItemsSource="{Binding Options}" Focusable="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:GroupOption}">
+                                    <RadioButton Style="{StaticResource PillRadio}" Padding="14,8" FontSize="13.5" IsChecked="{Binding IsSelected, Mode=TwoWay}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE73E;" Foreground="{StaticResource TealBrush}" VerticalAlignment="Center" Margin="0,1,8,0"
+                                                       Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}}" />
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding Tag}" FontSize="12" Foreground="{StaticResource TealBrush}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                       Visibility="{Binding HasTag, Converter={StaticResource BoolToVisibility}}" />
+                                        </StackPanel>
+                                    </RadioButton>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <RadioButton Style="{StaticResource PillRadio}" Padding="14,8" FontSize="13.5" HorizontalAlignment="Left"
+                                     IsChecked="{Binding Merge, Mode=TwoWay}"
+                                     Visibility="{Binding CanMerge, Converter={StaticResource BoolToVisibility}}"
+                                     ToolTip="Make one version that works for every map: keeps only what all of them agree on.">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE73E;" Foreground="{StaticResource TealBrush}" VerticalAlignment="Center" Margin="0,1,8,0"
+                                           Visibility="{Binding Merge, Converter={StaticResource BoolToVisibility}}" />
+                                <TextBlock Text="{Binding MergeLabel}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding MergeTag}" FontSize="12" Foreground="{StaticResource TealBrush}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </StackPanel>
+                        </RadioButton>
+
+                        <RadioButton Style="{StaticResource PillRadio}" Padding="14,8" FontSize="13.5" HorizontalAlignment="Left"
+                                     IsChecked="{Binding Ignore, Mode=TwoWay}"
+                                     ToolTip="Don't change any files. Marks this clash as fine so it stops showing as a problem.">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE73E;" Foreground="{StaticResource TealBrush}" VerticalAlignment="Center" Margin="0,1,8,0"
+                                           Visibility="{Binding Ignore, Converter={StaticResource BoolToVisibility}}" />
+                                <TextBlock Text="Ignore this clash" VerticalAlignment="Center" />
+                                <TextBlock Text="don't fix it" FontSize="12" Foreground="{StaticResource Muted2Brush}" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </StackPanel>
+                        </RadioButton>
+
+                        <!-- What this choice does -->
+                        <Border Background="{StaticResource SurfaceBrush}" CornerRadius="8" Padding="14,10" Margin="0,6,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource Icon}" FontSize="13" Text="&#xE8DE;" Foreground="{StaticResource TealBrush}" VerticalAlignment="Top" Margin="0,2,12,0" />
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Style="{StaticResource Body}" Text="{Binding Effect}" />
+                                    <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource MutedBrush}" Text="{Binding TradeOff}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                               Visibility="{Binding HasTradeOff, Converter={StaticResource BoolToVisibility}}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <ToggleButton Style="{StaticResource LinkButton}" IsChecked="{Binding ShowFiles}" HorizontalAlignment="Left" Margin="0,10,0,0">
+                            <TextBlock Text="{Binding FilesLabel}" />
+                        </ToggleButton>
+
+                        <!-- Files, one by one -->
+                        <ItemsControl ItemsSource="{Binding Files}" Focusable="False" Margin="0,4,0,0"
+                                      Visibility="{Binding ShowFiles, Converter={StaticResource BoolToVisibility}}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:ResolveFile}">
+                                    <StackPanel Margin="0,8,0,2">
+                                        <TextBlock TextWrapping="Wrap">
+                                            <Run Text="{Binding FileName, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" FontSize="12.5" Foreground="{StaticResource TextBrush}" /><Run Text="   " /><Run Text="{Binding Meaning, Mode=OneWay}" FontSize="12.5" Foreground="{StaticResource MutedBrush}" />
+                                        </TextBlock>
+                                        <TextBlock Style="{StaticResource Small}" Text="{Binding KeptText}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                                   Visibility="{Binding CanMerge, Converter={StaticResource BoolToVisibility}}" />
+                                        <ItemsControl ItemsSource="{Binding Options}" Focusable="False" Margin="0,6,0,0">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:ResolveOption}">
+                                                    <RadioButton Style="{StaticResource PillRadio}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Content="{Binding Label}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <!-- Confirm step: one row per map, with the files moved out of it. -->
+        <DataTemplate x:Key="MoveGroupTemplate" DataType="{x:Type vm:MoveGroup}">
+            <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1" Padding="18,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="2*" />
+                        <ColumnDefinition Width="3*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="0,0,16,0">
+                        <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Style="{StaticResource Icon}" FontSize="11" Text="&#xE72E;" Foreground="{StaticResource Muted2Brush}" Margin="8,3,0,0"
+                                   ToolTip="Locked with Escrow" Visibility="{Binding IsLocked, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" TextWrapping="Wrap" ToolTip="{Binding Paths}">
+                        <Run Text="{Binding Count, Mode=OneWay}" FontSize="12.5" Foreground="{StaticResource MutedBrush}" /><Run Text=":  " Foreground="{StaticResource MutedBrush}" /><Run Text="{Binding FileList, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" FontSize="12" Foreground="{StaticResource TextBrush}" />
+                    </TextBlock>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid Background="{StaticResource OverlayBrush}">
+        <Grid MaxWidth="980" Margin="48,32" VerticalAlignment="Center">
+            <!-- Shadow on its own layer so the text stays crisp. -->
+            <Border CornerRadius="14" Background="{StaticResource SurfaceBrush}">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="40" ShadowDepth="10" Opacity="0.55" Color="Black" />
+                </Border.Effect>
+            </Border>
+            <Border CornerRadius="14" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource LineStrongBrush}" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Header -->
+                    <Grid Margin="28,22,18,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Small}" FontWeight="SemiBold" Foreground="{StaticResource TealBrush}" Text="{Binding StepText}" />
+                            <StackPanel Visibility="{Binding IsChoosing, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Style="{StaticResource H1}" Text="{Binding Title}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding IsConfirming, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Style="{StaticResource H1}" Text="{Binding ConfirmTitle}" Margin="0,6,0,6" />
+                                <TextBlock Style="{StaticResource Muted}" Text="{Binding ConfirmText}" MaxWidth="760" HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </StackPanel>
+                        <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding CancelCommand}" ToolTip="Close without changing anything"
+                                VerticalAlignment="Top">
+                            <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE711;" />
+                        </Button>
+                    </Grid>
+
+                    <!-- Step 1: choose -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,18,0,0" Padding="28,0,22,6"
+                                  Visibility="{Binding IsChoosing, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <!-- How this works, in three short lines -->
+                            <Border Background="{StaticResource Surface2Brush}" CornerRadius="10" Padding="16,12,16,6" Margin="0,0,0,16">
+                                <ItemsControl ItemsSource="{Binding HowItWorks}" Focusable="False" AlternationCount="4">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="24" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Foreground="{StaticResource TealBrush}" FontWeight="SemiBold" FontSize="13"
+                                                           Text="{Binding (ItemsControl.AlternationIndex), RelativeSource={RelativeSource AncestorType=ContentPresenter}, Converter={StaticResource StepNumber}}" />
+                                                <TextBlock Grid.Column="1" Style="{StaticResource Body}" FontSize="13" Text="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+                            <WrapPanel Margin="0,0,0,12">
+                                <TextBlock Style="{StaticResource Small}" Text="Set all at once:" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                <Button Style="{StaticResource LinkButton}" Command="{Binding UseFocusForAllCommand}" Margin="0,0,16,0"
+                                        Visibility="{Binding HasFocus, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock>
+                                        <Run Text="Show" /> <Run Text="{Binding FocusName, Mode=OneWay}" /> <Run Text="everywhere" />
+                                    </TextBlock>
+                                </Button>
+                                <Button Style="{StaticResource LinkButton}" Command="{Binding LeaveAllCommand}" Content="Leave everything as it is" />
+                            </WrapPanel>
+                            <ItemsControl ItemsSource="{Binding Groups}" ItemTemplate="{StaticResource GroupTemplate}" Focusable="False" />
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Step 2: confirm -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,18,0,0" Padding="28,0,22,6"
+                                  Visibility="{Binding IsConfirming, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel>
+                            <!-- Files being combined -->
+                            <Border Style="{StaticResource Card}" Padding="0,2,0,0" Margin="0,0,0,12" Visibility="{Binding HasMerges, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel>
+                                    <Grid Margin="18,8,18,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="3*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource Muted2Brush}" Text="Combined, so every map works" />
+                                        <TextBlock Grid.Column="1" Style="{StaticResource Small}" Foreground="{StaticResource Muted2Brush}" Text="What changes" />
+                                    </Grid>
+                                    <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0">
+                                        <ItemsControl ItemsSource="{Binding Merges}" Focusable="False">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:MergeLine}">
+                                                    <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1" Padding="18,10">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="2*" />
+                                                                <ColumnDefinition Width="3*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Margin="0,0,16,0">
+                                                                <TextBlock Text="{Binding FileName}" FontFamily="{StaticResource MonoFont}" FontSize="12.5" Foreground="{StaticResource TextBrush}" TextWrapping="Wrap" />
+                                                                <TextBlock Style="{StaticResource Small}" Text="{Binding Maps}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                            </StackPanel>
+                                                            <TextBlock Grid.Column="1" Style="{StaticResource Small}" Foreground="{StaticResource TextBrush}" Text="{Binding Kept}" TextWrapping="Wrap" />
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Padding="0,2,0,0" Visibility="{Binding HasMovedOut, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel>
+                                    <Grid Margin="18,8,18,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="3*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource Muted2Brush}" Text="Taken out of" />
+                                        <TextBlock Grid.Column="1" Style="{StaticResource Small}" Foreground="{StaticResource Muted2Brush}" Text="Files (hover to see where they are)" />
+                                    </Grid>
+                                    <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0">
+                                        <ItemsControl ItemsSource="{Binding Moves}" ItemTemplate="{StaticResource MoveGroupTemplate}" Focusable="False" />
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <StackPanel Visibility="{Binding HasMoves, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Style="{StaticResource SectionLabel}" Text="Backup folder" Margin="2,8,0,6" />
+                            <Border Background="{StaticResource BgBrush}" CornerRadius="8" Padding="14,10">
+                                <TextBlock Style="{StaticResource Mono}" Text="{Binding BackupFolder}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" />
+                            </Border>
+                            <TextBlock Style="{StaticResource Small}" Margin="2,6,0,0" TextWrapping="Wrap"
+                                       Text="Outside your resources folder, so FiveM never loads it. Originals and a list of the changes are saved there." />
+
+                            <!-- What changes in game -->
+                            <Grid Margin="0,18,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource Icon}" FontSize="14" Text="&#xE946;" Foreground="{StaticResource TealBrush}" Margin="2,2,12,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Style="{StaticResource Body}" Text="{Binding EffectText}" />
+                            </Grid>
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource Icon}" FontSize="14" Text="&#xE72C;" Foreground="{StaticResource TealBrush}" Margin="2,2,12,0" VerticalAlignment="Top" />
+                                <TextBlock Grid.Column="1" Style="{StaticResource Body}"
+                                           Text="Restart your server afterwards so players get the change. If your server is running right now, Windows may not let us move the files. Stop it first if that happens." />
+                            </Grid>
+
+                            </StackPanel>
+
+                            <!-- Clashes being ignored -->
+                            <StackPanel Visibility="{Binding HasIgnoring, Converter={StaticResource BoolToVisibility}}" Margin="0,16,0,0">
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Ignored (no files moved, marked as fine)" Margin="2,0,0,6" />
+                                <Border Style="{StaticResource Card}" Padding="18,12">
+                                    <ItemsControl ItemsSource="{Binding Ignoring}" Focusable="False">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource TextBrush}" Text="{Binding}" TextWrapping="Wrap" Margin="0,3" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
+                            </StackPanel>
+
+                            <Border Background="{StaticResource WarningTintBrush}" BorderBrush="{StaticResource WarningEdgeBrush}" BorderThickness="1"
+                                    CornerRadius="10" Padding="14,12" Margin="0,16,0,0"
+                                    Visibility="{Binding HasLockedText, Converter={StaticResource BoolToVisibility}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource Icon}" FontSize="13" Text="&#xE72E;" Foreground="{StaticResource WarningBrush}" Margin="0,2,12,0" VerticalAlignment="Top" />
+                                    <TextBlock Grid.Column="1" Style="{StaticResource Body}" Text="{Binding LockedText}" />
+                                </Grid>
+                            </Border>
+
+                            <Border Background="{StaticResource ProblemSoftBrush}" CornerRadius="10" Padding="14,12" Margin="0,16,0,0"
+                                    Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE783;" Foreground="{StaticResource ProblemBrush}" Margin="0,2,12,0" VerticalAlignment="Top" />
+                                    <TextBlock Grid.Column="1" Style="{StaticResource Body}" Text="{Binding Error}" />
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Footer -->
+                    <Border Grid.Row="2" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="28,14,22,16" Margin="0,8,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource Small}" Text="{Binding Summary}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0"
+                                       Visibility="{Binding IsChoosing, Converter={StaticResource BoolToVisibility}}" />
+                            <TextBlock Style="{StaticResource Small}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0"
+                                       Text="Nothing has changed yet."
+                                       Visibility="{Binding IsConfirming, Converter={StaticResource BoolToVisibility}}" />
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Visibility="{Binding IsChoosing, Converter={StaticResource BoolToVisibility}}">
+                                <Button Style="{StaticResource GhostButton}" Command="{Binding CancelCommand}" Content="Cancel" Margin="0,0,8,0" />
+                                <Button Style="{StaticResource PrimaryButton}" Command="{Binding NextCommand}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding NextLabel}" />
+                                        <TextBlock Style="{StaticResource Icon}" FontSize="11" Text="&#xE76C;" Margin="8,1,0,0" Foreground="{StaticResource TealInkBrush}" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Visibility="{Binding IsConfirming, Converter={StaticResource BoolToVisibility}}">
+                                <Button Style="{StaticResource GhostButton}" Command="{Binding BackCommand}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" FontSize="11" Text="&#xE76B;" Margin="0,1,8,0" />
+                                        <TextBlock Text="Back" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource PrimaryButton}" Command="{Binding ApplyCommand}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE8DE;" Margin="0,1,8,0" Foreground="{StaticResource TealInkBrush}" />
+                                        <TextBlock Text="{Binding ApplyLabel}" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,14 @@
+<UserControl x:Class="LGMods.MapDoctor.App.Views.ScanningView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <StackPanel Width="520" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,60">
+            <TextBlock Style="{StaticResource Display}" FontSize="48" LineHeight="48" Text="CHECKING YOUR MAPS…" TextAlignment="Center" />
+            <TextBlock Style="{StaticResource Muted}" Margin="0,8,0,28" Text="We're only reading your files. This usually takes a few seconds."
+                       TextAlignment="Center" />
+            <ProgressBar Value="{Binding Percent, Mode=OneWay}" Maximum="100" />
+            <TextBlock Style="{StaticResource Small}" Margin="0,12,0,24" Text="{Binding Message}" TextTrimming="CharacterEllipsis" TextAlignment="Center" />
+            <Button Style="{StaticResource SmallGhostButton}" Command="{Binding CancelCommand}" HorizontalAlignment="Center" Content="Cancel" />
+        </StackPanel>
+    </Grid>
+</UserControl>

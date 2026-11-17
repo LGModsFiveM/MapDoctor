@@ -1,0 +1,112 @@
+<UserControl x:Class="LGMods.MapDoctor.App.Views.PastFixesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:LGMods.MapDoctor.App.ViewModels">
+    <UserControl.InputBindings>
+        <KeyBinding Key="Escape" Command="{Binding CloseCommand}" />
+    </UserControl.InputBindings>
+
+    <Grid Background="{StaticResource OverlayBrush}">
+        <Grid MaxWidth="760" Margin="48,32" VerticalAlignment="Center">
+            <Border CornerRadius="14" Background="{StaticResource SurfaceBrush}">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="40" ShadowDepth="10" Opacity="0.55" Color="Black" />
+                </Border.Effect>
+            </Border>
+            <Border CornerRadius="14" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource LineStrongBrush}" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Margin="28,24,18,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource H1}" Text="{Binding Title}" Margin="0,0,0,6" />
+                            <TextBlock Style="{StaticResource Muted}" Text="{Binding Subtitle}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Style="{StaticResource IconButton}" Command="{Binding CloseCommand}" ToolTip="Close" VerticalAlignment="Top">
+                            <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE711;" />
+                        </Button>
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,18,0,0" Padding="28,0,22,6">
+                        <StackPanel>
+                        <TextBlock Style="{StaticResource Muted}" Text="{Binding Empty}" Margin="0,0,0,12"
+                                   Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />
+                        <ItemsControl ItemsSource="{Binding Items}" Focusable="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:PastFix}">
+                                    <Border Style="{StaticResource Card}" Margin="0,0,0,12" Padding="18,14,14,14">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Style="{StaticResource Small}" FontWeight="SemiBold" Foreground="{StaticResource TealBrush}" Text="{Binding When}" />
+                                                <TextBlock Style="{StaticResource H2}" Text="{Binding Summary}" Margin="0,3,0,8" TextWrapping="Wrap" />
+                                                <ItemsControl ItemsSource="{Binding Files}" Focusable="False">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate DataType="{x:Type vm:PastFileLine}">
+                                                            <TextBlock Style="{StaticResource Small}" TextTrimming="CharacterEllipsis" Margin="0,1">
+                                                                <Run Text="{Binding FileName, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource TextBrush}" /><Run Text="   from " Foreground="{StaticResource Muted2Brush}" /><Run Text="{Binding MapName, Mode=OneWay}" />
+                                                            </TextBlock>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource Muted2Brush}" Text="{Binding MoreFiles}" Margin="0,2,0,0"
+                                                           Visibility="{Binding HasMoreFiles, Converter={StaticResource BoolToVisibility}}" />
+                                                <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource WarningBrush}" Text="{Binding Problem}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                                           Visibility="{Binding HasProblem, Converter={StaticResource BoolToVisibility}}" />
+                                                <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource ProblemBrush}" Text="{Binding Error}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                                           Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="16,0,0,0">
+                                                <Button Style="{StaticResource SmallGhostButton}" Command="{Binding OpenFolderCommand}" Content="Open backup" Margin="0,0,8,0" />
+                                                <Button Style="{StaticResource SmallGhostButton}" Command="{Binding ForgetCommand}" Content="Forget" ToolTip="{Binding ForgetTip}" Margin="0,0,8,0"
+                                                        Visibility="{Binding HasProblem, Converter={StaticResource BoolToVisibility}}" />
+                                                <Button Style="{StaticResource SmallGhostButton}" Command="{Binding UndoCommand}">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE7A7;" Margin="0,0,8,0" />
+                                                        <TextBlock Text="Undo" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Border Grid.Row="2" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="28,14,22,16" Margin="0,8,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource Small}" Foreground="{StaticResource ProblemBrush}" Text="{Binding Error}" TextWrapping="Wrap"
+                                       VerticalAlignment="Center" Margin="0,0,16,0" Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}" />
+                            <Button Grid.Column="1" Style="{StaticResource GhostButton}" Command="{Binding UndoAllCommand}" ToolTip="{Binding UndoAllTip}" Margin="0,0,8,0"
+                                    Visibility="{Binding CanUndoAll, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" FontSize="13" Text="&#xE7A7;" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding UndoAllLabel}" />
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="2" Style="{StaticResource GhostButton}" Command="{Binding CloseCommand}" Content="Close" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
