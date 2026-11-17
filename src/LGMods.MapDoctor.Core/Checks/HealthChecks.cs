@@ -1,3 +1,4 @@
+using LGMods.MapDoctor.Core.Fixing;
 using LGMods.MapDoctor.Core.Model;
 using LGMods.MapDoctor.Core.Text;
 
@@ -236,6 +237,28 @@ public static class HealthChecks
         // Leave out maps FiveM refuses to start and ignored duplicate folders; they have their own findings.
         var off = resources.Where(r => !r.IsStarted && r.ChangesTheWorld && r.WontStart is null && r.UsedInstead is null)
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ToList();
+
+        if (off.FirstOrDefault(r => r.Name.Equals(Resolver.FixResourceName, StringComparison.OrdinalIgnoreCase)) is { } ours)
+        {
+            off.Remove(ours);
+            yield return new Finding
+            {
+                Kind = FindingKind.MapsSwitchedOff,
+                Severity = Severity.Warning,
+                Title = "The files Map Doctor combined aren't switched on",
+                Where = ours.Name,
+                WhatsWrong =
+                    $"Map Doctor put combined versions of clashing files in {ours.Name}, but your server never starts it, " +
+                    "so players still get the clashes.",
+                WhatToDo =
+                [
+                    $"Add \"{Resolver.StartLine}\" as the last line of your server.cfg, then restart your server.",
+                    "Or, if you don't want the combined files any more, undo that fix in \"Undo fixes\".",
+                ],
+                Details = [ours.Directory],
+                Resources = [ours],
+            };
+        }
         if (off.Count == 0) yield break;
 
         yield return new Finding

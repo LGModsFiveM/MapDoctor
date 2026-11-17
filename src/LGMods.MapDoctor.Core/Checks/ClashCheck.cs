@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using LGMods.MapDoctor.Core.Fixing;
 using LGMods.MapDoctor.Core.Model;
 using LGMods.MapDoctor.Core.Text;
 
@@ -9,7 +10,7 @@ namespace LGMods.MapDoctor.Core.Checks;
 public static class ClashCheck
 {
     // Resources whose whole job is to replace clashing files with combined versions.
-    private static readonly string[] FixResourceNames = ["vertex-hub", "vertex_hub", "vertexhub", "lgmods_fixes", "lgmods-fixes"];
+    private static readonly string[] FixResourceNames = ["vertex-hub", "vertex_hub", "vertexhub", "lgmods_fixes", "lgmods-fixes", Resolver.FixResourceName];
 
     // Almost every map ships these under the same name, but FiveM loads them per resource, so a "clash" is a false alarm.
     private static readonly HashSet<string> PerResourceFiles = new(StringComparer.OrdinalIgnoreCase) { "_manifest.ymf" };
@@ -117,6 +118,7 @@ public static class ClashCheck
     {
         var others = clashes.SelectMany(c => c.Resources).Where(r => r != fixer).Distinct()
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var ours = fixer.Name.Equals(Resolver.FixResourceName, StringComparison.OrdinalIgnoreCase);
 
         return new Finding
         {
@@ -125,12 +127,14 @@ public static class ClashCheck
             Title = $"{fixer.Name} is already sorting out {Plain.Count(clashes.Count, "clashing file")}",
             Where = $"{Plain.Count(others.Count, "map")} it combines",
             WhatsWrong =
-                $"{fixer.Name} is a fix-up resource. It contains combined versions of files that other maps clash on, " +
-                "and because it starts last, its versions are the ones players get. Nothing to do here.",
+                $"{fixer.Name} is a fix-up resource{(ours ? " Map Doctor made" : "")}. It contains combined versions of files " +
+                "that other maps clash on, and because it starts last, its versions are the ones players get. Nothing to do here.",
             WhatToDo =
             [
                 $"Keep {fixer.Name} as the last thing in your start-up list.",
-                $"If you update any of the maps it combines, rebuild {fixer.Name} so it picks up the changes.",
+                ours
+                    ? "If you update any of the maps it combines, undo that fix in \"Undo fixes\" and combine them again, so the update is included."
+                    : $"If you update any of the maps it combines, rebuild {fixer.Name} so it picks up the changes.",
             ],
             Details = clashes.OrderBy(c => c.FileName, StringComparer.OrdinalIgnoreCase)
                 .Select(c => $"{c.FileName}: {string.Join(", ", c.Resources.Where(r => r != fixer).Select(r => r.Name))}")

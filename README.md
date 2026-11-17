@@ -68,14 +68,19 @@ worry about them), and start-up lines in `server.cfg` that point at resources th
 ## Fixing clashes
 
 When two maps clash, the **Resolve** screen lets you pick which map should win in each spot.
-For some files Map Doctor can combine both versions, so every map keeps working.
+
+For some files Map Doctor can combine both versions, so every map keeps working. Combined files go
+in their own resource, `LGMods_MapDoctor`, and your maps aren't touched. It needs to start after your
+maps, so Map Doctor can add `ensure LGMods_MapDoctor` to the end of your `server.cfg` for you, or you
+can add it yourself.
 
 Your files are safe:
 
 - **Nothing changes until you confirm.** Scanning only reads your files.
 - **Everything is backed up.** Files that get taken out are moved to a backup folder outside
   `resources`, so FiveM never loads them, along with a note of what changed.
-- **You can undo it.** Open **Undo fixes** to put any change back exactly how it was.
+- **You can undo it.** Open **Undo fixes** to put any change back exactly how it was. Once nothing
+  combined is left, `LGMods_MapDoctor` and its `server.cfg` line are removed too.
 
 Restart your server afterwards so players get the change. If the server is running while you fix,
 Windows may not let Map Doctor move the files, so stop it first.

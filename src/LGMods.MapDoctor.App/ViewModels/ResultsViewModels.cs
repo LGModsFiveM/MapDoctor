@@ -262,8 +262,8 @@ public sealed class ResultsViewModel : ObservableObject
         return null;
     }
 
-    public void AfterFix(Core.Fixing.FixRecord record) =>
-        _ = _main.RescanAsync(Folder, CurrentView(), FixNotice.Fixed(_main, record));
+    public void AfterFix(Core.Fixing.FixRecord record, bool needsStartLine) =>
+        _ = _main.RescanAsync(Folder, CurrentView(), FixNotice.Fixed(_main, record, needsStartLine));
 
     public ViewState CurrentView() => new(IsMapView, SelectedMap?.Name, Selected?.Finding.Key);
 
@@ -643,7 +643,8 @@ public sealed class MapViewModel : ObservableObject
     public string Name => Resource.Name;
     public string FolderPath => Resource.Directory;
     public bool IsLgMods => IsLgModsName(Resource.Name);
-    public static bool IsLgModsName(string name) => name.StartsWith("LGMods", StringComparison.OrdinalIgnoreCase);
+    public static bool IsLgModsName(string name) => name.StartsWith("LGMods", StringComparison.OrdinalIgnoreCase)
+        && !name.Equals(Core.Fixing.Resolver.FixResourceName, StringComparison.OrdinalIgnoreCase);
     public bool IsLocked => Resource.IsLocked;
 
     public string CategoryText => Resource.Categories.Count == 0
@@ -665,8 +666,9 @@ public sealed class MapViewModel : ObservableObject
     public Severity? Status => HasProblems ? Severity.Problem : HasWarnings ? Severity.Warning : null;
     public bool IsClear => Status is null;
 
-    // A map the server really runs: started, with world files, and not an ignored duplicate folder.
-    public bool IsRealMap => Resource.IsStarted && Resource.ChangesTheWorld && Resource.UsedInstead is null;
+    // A map the server really runs: started, with world files, and not an ignored duplicate folder or a fix-up resource.
+    public bool IsRealMap => Resource.IsStarted && Resource.ChangesTheWorld && Resource.UsedInstead is null
+                             && !Core.Checks.ClashCheck.IsFixResource(Resource);
 
     public string Group => IsLgMods ? "LG Mods maps"
         : !IsRealMap ? "Other resources (not maps)"

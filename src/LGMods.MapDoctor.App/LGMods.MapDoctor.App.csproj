@@ -15,6 +15,7 @@
     <Company>LGMods</Company>
     <Version>0.1.0</Version>
     <ApplicationIcon>Assets/app.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>

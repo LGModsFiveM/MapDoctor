@@ -55,7 +55,7 @@
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate DataType="{x:Type vm:PastFileLine}">
                                                             <TextBlock Style="{StaticResource Small}" TextTrimming="CharacterEllipsis" Margin="0,1">
-                                                                <Run Text="{Binding FileName, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource TextBrush}" /><Run Text="   from " Foreground="{StaticResource Muted2Brush}" /><Run Text="{Binding MapName, Mode=OneWay}" />
+                                                                <Run Text="{Binding FileName, Mode=OneWay}" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource TextBrush}" /><Run Text="   " /><Run Text="{Binding Where, Mode=OneWay}" Foreground="{StaticResource Muted2Brush}" />
                                                             </TextBlock>
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>

@@ -18,6 +18,7 @@ public sealed class ResolveViewModel : ObservableObject
     private bool _isConfirming;
     private string? _error;
     private FixPlan? _plan;
+    private bool _addStartLine = true;
 
     public ResolveViewModel(ResultsViewModel owner, IReadOnlyList<FindingViewModel> clashes, ResourceInfo? focus)
     {
@@ -38,7 +39,8 @@ public sealed class ResolveViewModel : ObservableObject
         };
         if (Groups.Any(g => g.CanMerge))
             howItWorks.Insert(2,
-                "Some clashes can be combined instead, so every map works and nothing is hidden. We've picked that wherever it's possible.");
+                "Some clashes can be combined instead, so every map works and nothing is hidden. The combined files go in their own " +
+                $"resource, {Resolver.FixResourceName}, so your maps aren't changed. We've picked that wherever it's possible.");
         HowItWorks = howItWorks;
 
         CancelCommand = new RelayCommand(owner.CloseDialog);
@@ -132,8 +134,8 @@ public sealed class ResolveViewModel : ObservableObject
 
     public string ConfirmText => (PlannedMerges > 0, PlannedMoves > 0) switch
     {
-        (true, _) => "Combined files go into every map involved, so it doesn't matter which one loads. The originals, and " +
-                     "any copies taken out, are kept in a backup. Nothing is deleted.",
+        (true, _) => $"Combined files go in Map Doctor's own resource, {Resolver.FixResourceName}, which starts after your maps so its " +
+                     "versions are the ones players get. Your maps aren't changed, and nothing is deleted.",
         (false, true) => "These copies will be taken out of your resources so the versions you chose are the only ones left. " +
                          "The versions you keep aren't touched, and nothing is deleted.",
         _ => "No files will be moved. These clashes will be marked as fine, so they stop showing as problems. " +
@@ -145,6 +147,27 @@ public sealed class ResolveViewModel : ObservableObject
     public bool HasMovedOut => Moves.Count > 0;
     public IReadOnlyList<MergeLine> Merges { get; private set; } = [];
     public bool HasMerges => Merges.Count > 0;
+
+    // The fix resource only works once server.cfg starts it, after the maps.
+    private bool FixIsRunning => _owner.Result.Resources.Any(r =>
+        r.IsStarted && r.Name.Equals(Resolver.FixResourceName, StringComparison.OrdinalIgnoreCase));
+    public bool CanAddStartLine => HasMerges && !FixIsRunning && _owner.Result.StartListFile is not null;
+    public bool AddStartLine
+    {
+        get => _addStartLine;
+        set { if (Set(ref _addStartLine, value)) OnPropertyChanged(nameof(AddMyself)); }
+    }
+    public bool AddMyself
+    {
+        get => !_addStartLine;
+        set => AddStartLine = !value;
+    }
+    public string StartLine => Resolver.StartLine;
+    public string? StartLineNote => !HasMerges ? null
+        : FixIsRunning ? $"{Resolver.FixResourceName} already starts from your server.cfg, so the combined files load straight away."
+        : _owner.Result.StartListFile is null ? $"We couldn't find your server.cfg. Add \"{Resolver.StartLine}\" as its last line, or the combined files won't load."
+        : $"{Resolver.FixResourceName} has to start after your maps, so it needs a line at the end of your server.cfg.";
+    public bool HasStartLineNote => StartLineNote is not null;
 
     public IReadOnlyList<string> Ignoring { get; private set; } = [];
     public bool HasIgnoring => Ignoring.Count > 0;
@@ -188,7 +211,7 @@ public sealed class ResolveViewModel : ObservableObject
         try
         {
             _plan = files.Count > 0 || merges.Count > 0
-                ? Resolver.Plan(_owner.Result.ResourcesFolder, files, DateTime.Now, merges)
+                ? Resolver.Plan(_owner.Result.ResourcesFolder, files, DateTime.Now, merges, _owner.Result.StartListFile)
                 : null;
         }
         catch (FixException e)
@@ -210,8 +233,9 @@ public sealed class ResolveViewModel : ObservableObject
 
         Merges = _plan.Merges.Select(m => new MergeLine(m.FileName, $"for {Plain.JoinAndShort(m.Maps)}", KeptText(m.Result))).ToList();
         var byPath = files.ToDictionary(f => f.FullPath, StringComparer.OrdinalIgnoreCase);
+        // Combining again can also back up an older combined file; that's ours, so it isn't listed as taken out of a map.
         Moves = _plan.Moves
-            .Where(m => !m.IsMerge)
+            .Where(m => byPath.ContainsKey(m.From))
             .GroupBy(m => m.ResourceName, StringComparer.OrdinalIgnoreCase)
             .Select(g =>
             {
@@ -229,21 +253,17 @@ public sealed class ResolveViewModel : ObservableObject
         var losers = Moves.Select(m => m.Name).ToList();
         const string undo = "If anything looks wrong afterwards, press \"Undo fixes\" (at the top of your results, or on the start screen) and every file goes back.";
         EffectText = losers.Count == 0
-            ? $"Every map involved gets the combined version, so none of their buildings are hidden. {undo}"
+            ? $"Players get the combined versions, so none of these maps' buildings are hidden. {undo}"
             : losers.Count == 1
             ? $"Around {losers[0]}, players will get the versions you chose instead. If anything there looks wrong " +
               "afterwards, press \"Undo fixes\" (at the top of your results, or on the start screen) and every file goes back."
             : $"Around {Plain.JoinAndShort(losers)}, players will get the versions you chose instead. {undo}";
 
-        var lockedNames = _owner.Result.Resources.Where(r => r.IsLocked).Select(r => r.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var locked = Moves.Where(m => m.IsLocked).Select(m => m.Name)
-            .Concat(_plan.Merges.SelectMany(m => m.Maps).Where(lockedNames.Contains))
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var locked = Moves.Where(m => m.IsLocked).Select(m => m.Name).ToList();
         LockedText = locked.Count == 0
             ? null
             : $"{Plain.JoinAndShort(locked)} {(locked.Count == 1 ? "is" : "are")} locked with Escrow. We never open locked files. " +
-              "We only move map files, or swap in a combined occlusion file, which Escrow doesn't lock. That normally works. " +
-              "If the map stops starting, press Undo.";
+              "We only move map files, which Escrow doesn't lock. That normally works. If the map stops starting, press Undo.";
 
         RaiseConfirm();
         Error = null;
@@ -254,7 +274,8 @@ public sealed class ResolveViewModel : ObservableObject
     {
         foreach (var name in new[] { nameof(Moves), nameof(Merges), nameof(HasMerges), nameof(HasMovedOut), nameof(BackupFolder),
                      nameof(EffectText), nameof(LockedText), nameof(HasLockedText), nameof(ConfirmTitle), nameof(ConfirmText),
-                     nameof(ApplyLabel), nameof(HasMoves), nameof(Ignoring), nameof(HasIgnoring) })
+                     nameof(ApplyLabel), nameof(HasMoves), nameof(Ignoring), nameof(HasIgnoring), nameof(CanAddStartLine),
+                     nameof(StartLineNote), nameof(HasStartLineNote) })
             OnPropertyChanged(name);
     }
 
@@ -270,11 +291,12 @@ public sealed class ResolveViewModel : ObservableObject
     private void Apply()
     {
         FixRecord? record = null;
+        var addLine = CanAddStartLine && AddStartLine;
         if (_plan is not null)
         {
             try
             {
-                record = Resolver.Apply(_plan, DateTime.Now);
+                record = Resolver.Apply(_plan with { AddStartLine = addLine }, DateTime.Now);
             }
             catch (FixException e)
             {
@@ -286,7 +308,7 @@ public sealed class ResolveViewModel : ObservableObject
         // Ignoring is the same as "Mark as fine" on the results page, and can be undone there.
         foreach (var group in FineChanges.ToList()) group.Finding.IsFine = group.Ignore;
 
-        if (record is not null) _owner.AfterFix(record);
+        if (record is not null) _owner.AfterFix(record, needsStartLine: HasMerges && !FixIsRunning && !addLine);
         else _owner.CloseDialog();
     }
 }
@@ -416,7 +438,8 @@ public sealed class ResolveGroup : ObservableObject
             {
                 var all = Resources.Count == 2 ? "both maps" : $"all {Resources.Count} maps";
                 var text = $"Combines {(merging.Count == 1 ? merging[0].FileName : Plain.Count(merging.Count, "file"))} so {all} work: " +
-                           "only the hiding spots every map agrees on are kept, so none of their buildings vanish. The originals go to the backup folder.";
+                           "only the hiding spots every map agrees on are kept, so none of their buildings vanish. " +
+                           $"The combined version goes in {Resolver.FixResourceName}, so the maps themselves aren't changed.";
                 if (moving.Count > 0)
                     text += $" Also moves {Plain.Count(moving.Count, "file")} out of {Plain.JoinAndShort(moving.Select(m => m.Resource.Name).Distinct().ToList())}.";
                 var left = Files.Count(f => !f.IsChanged);
@@ -618,7 +641,7 @@ public sealed record MoveGroup(string Name, bool IsFocus, bool IsLocked, string 
 }
 public sealed record MoveLine(string FileName, string Path);
 public sealed record MergeLine(string FileName, string Maps, string Kept);
-public sealed record PastFileLine(string FileName, string MapName);
+public sealed record PastFileLine(string FileName, string Where);
 
 public sealed class FixNotice : ObservableObject
 {
@@ -636,15 +659,22 @@ public sealed class FixNotice : ObservableObject
         }
     }
 
-    public static FixNotice Fixed(MainViewModel main, FixRecord record) => new(
+    public static FixNotice Fixed(MainViewModel main, FixRecord record, bool needsStartLine = false) => new(
         FixedTitle(record),
-        "Restart your server (or the maps involved) so players get the change. Changed your mind? Undo puts every file back.",
+        needsStartLine
+            ? $"Add \"{Resolver.StartLine}\" as the last line of your server.cfg, then restart your server so players get the change. " +
+              "Changed your mind? Undo takes it all back out."
+            : record.Combined.Count > 0
+                ? "Restart your server so players get the change. Changed your mind? Undo puts everything back."
+                : "Restart your server (or the maps involved) so players get the change. Changed your mind? Undo puts every file back.",
         record, main);
+
+    private static bool IsOwn(FileMove m) => m.ResourceName.Equals(Resolver.FixResourceName, StringComparison.OrdinalIgnoreCase);
 
     private static string FixedTitle(FixRecord record)
     {
-        var combined = record.Moves.Where(m => m.IsMerge).Select(m => m.FileName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        var moved = record.Moves.Count(m => !m.IsMerge);
+        var combined = record.Combined.Count;
+        var moved = record.Moves.Count(m => !IsOwn(m));
         return (combined > 0, moved > 0) switch
         {
             (true, false) => $"Combined {Plain.Count(combined, "file")} so every map works",
@@ -654,7 +684,9 @@ public sealed class FixNotice : ObservableObject
     }
 
     public static FixNotice Undone(MainViewModel main, FixRecord record) => new(
-        $"Put {Plain.Count(record.Moves.Count, "file")} back",
+        record.Moves.Any(m => !IsOwn(m))
+            ? $"Put {Plain.Count(record.Moves.Count(m => !IsOwn(m)), "file")} back"
+            : $"Took away {Plain.Count(record.Combined.Count, "combined file")}",
         "Everything is back the way it was. Restart your server so players get the change.",
         null, main);
 
@@ -734,19 +766,25 @@ public sealed class PastFix : ObservableObject
             : record.MadeAt.ToString("d MMM yyyy");
         When = $"{day} at {record.MadeAt:HH:mm}";
 
-        var maps = record.Moves.Select(m => m.ResourceName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var names = record.Moves.Select(m => m.FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var combined = record.Moves.Where(m => m.IsMerge).Select(m => m.FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var what = names.Count == 1 && record.Moves.Count > 1
-            ? $"{record.Moves.Count} copies of {names[0]}"
-            : Plain.Count(record.Moves.Count, "file");
-        Summary = combined.Count == names.Count
-            ? $"Combined {(combined.Count == 1 ? combined[0] : Plain.Count(combined.Count, "file"))} for {Plain.JoinAndShort(maps)}"
-            : combined.Count > 0
-                ? $"Combined {Plain.Count(combined.Count, "file")} and moved others out of {Plain.JoinAndShort(maps)}"
-                : $"Moved {what} out of {Plain.JoinAndShort(maps)}";
-        Files = record.Moves.Take(MaxFiles).Select(m => new PastFileLine(m.FileName, m.ResourceName)).ToList();
-        MoreFiles = record.Moves.Count > MaxFiles ? $"+ {Plain.Count(record.Moves.Count - MaxFiles, "more file")}" : null;
+        var moved = record.Moves.Where(m => !m.ResourceName.Equals(Resolver.FixResourceName, StringComparison.OrdinalIgnoreCase)).ToList();
+        var movedFrom = moved.Select(m => m.ResourceName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var names = moved.Select(m => m.FileName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var combined = record.Combined.Select(c => c.FileName).ToList();
+        var what = names.Count == 1 && moved.Count > 1
+            ? $"{moved.Count} copies of {names[0]}"
+            : Plain.Count(moved.Count, "file");
+        Summary = (combined.Count > 0, moved.Count > 0) switch
+        {
+            (true, false) => $"Combined {(combined.Count == 1 ? combined[0] : Plain.Count(combined.Count, "file"))} for " +
+                             Plain.JoinAndShort(record.Combined.SelectMany(c => c.Maps).Distinct(StringComparer.OrdinalIgnoreCase).ToList()),
+            (true, true) => $"Combined {Plain.Count(combined.Count, "file")} and moved others out of {Plain.JoinAndShort(movedFrom)}",
+            _ => $"Moved {what} out of {Plain.JoinAndShort(movedFrom)}",
+        };
+        var lines = moved.Select(m => new PastFileLine(m.FileName, $"from {m.ResourceName}"))
+            .Concat(record.Combined.Select(c => new PastFileLine(c.FileName, $"combined into {Resolver.FixResourceName}")))
+            .ToList();
+        Files = lines.Take(MaxFiles).ToList();
+        MoreFiles = lines.Count > MaxFiles ? $"+ {Plain.Count(lines.Count - MaxFiles, "more file")}" : null;
 
         Problem = Resolver.WhyCantUndo(record);
         UndoCommand = new RelayCommand(() => Error = owner.UndoFix(record), () => CanUndo);

@@ -430,29 +430,51 @@ public class MergeTests
     }
 
     [Fact]
-    public void Combining_puts_the_same_file_in_every_map_and_undo_puts_the_originals_back()
+    public void Combining_puts_the_file_in_its_own_resource_and_undo_takes_it_all_away()
     {
         using var server = TwoMapsInOneArea();
         var result = MapDoctorScanner.Scan(server.Root);
         var copies = result.Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
         var originals = copies.Select(c => File.ReadAllBytes(c.FullPath)).ToList();
+        var config = File.ReadAllBytes(result.StartListFile!);
         var winner = copies.Single(c => c.Resource.Name == "garage");
 
-        var plan = Resolver.Plan(result.ResourcesFolder, [], DateTime.Now, [new MergeRequest(winner, copies)]);
-        var record = Resolver.Apply(plan, DateTime.Now);
+        var plan = Resolver.Plan(result.ResourcesFolder, [], DateTime.Now, [new MergeRequest(winner, copies)], result.StartListFile);
+        Resolver.Apply(plan with { AddStartLine = true }, DateTime.Now);
 
-        // Both maps now have the same, combined file, so whichever loads, both buildings show.
-        var now = copies.Select(c => File.ReadAllBytes(c.FullPath)).ToList();
-        Assert.Equal(now[0], now[1]);
-        Assert.Equal(2, GameFiles.BoxCount(now[0]));
-        Assert.All(record.Moves, m => Assert.True(File.Exists(m.To)));
-        Assert.DoesNotContain(MapDoctorScanner.Scan(server.Root).Findings, f => f.Kind == FindingKind.ClashingFiles);
+        // The maps aren't touched; the combined file is in LGMods_MapDoctor, which now starts last.
+        Assert.Equal(originals, copies.Select(c => File.ReadAllBytes(c.FullPath)).ToList());
+        var combined = Path.Combine(server.Resources, Resolver.FixResourceName, "stream", "lr_sc1_occl_00.ymap");
+        Assert.Equal(2, GameFiles.BoxCount(File.ReadAllBytes(combined)));
+        Assert.EndsWith(Resolver.StartLine, File.ReadAllText(result.StartListFile!).TrimEnd());
+        var after = MapDoctorScanner.Scan(server.Root);
+        Assert.DoesNotContain(after.Findings, f => f.Kind == FindingKind.ClashingFiles);
+        Assert.Contains(after.Findings, f => f.Kind == FindingKind.AlreadyFixed);
 
-        Assert.Null(Resolver.WhyCantUndo(Assert.Single(Resolver.FindRecords(result.ResourcesFolder))));
-        Resolver.Undo(Assert.Single(Resolver.FindRecords(result.ResourcesFolder)));
+        var saved = Assert.Single(Resolver.FindRecords(result.ResourcesFolder));
+        Assert.Null(Resolver.WhyCantUndo(saved));
+        Resolver.Undo(saved);
 
+        Assert.False(Directory.Exists(Resolver.FixFolder(result.ResourcesFolder)));
+        Assert.Equal(config, File.ReadAllBytes(result.StartListFile!));
         Assert.Equal(originals, copies.Select(c => File.ReadAllBytes(c.FullPath)).ToList());
         Assert.False(Directory.Exists(Resolver.BackupRoot(result.ResourcesFolder)));
+    }
+
+    [Fact]
+    public void Combined_files_that_arent_started_get_their_own_warning()
+    {
+        using var server = TwoMapsInOneArea();
+        var result = MapDoctorScanner.Scan(server.Root);
+        var copies = result.Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
+        var config = File.ReadAllBytes(result.StartListFile!);
+
+        Resolver.Apply(Resolver.Plan(result.ResourcesFolder, [], DateTime.Now, [new MergeRequest(copies[1], copies)], result.StartListFile), DateTime.Now);
+
+        Assert.Equal(config, File.ReadAllBytes(result.StartListFile!));
+        var warning = Assert.Single(MapDoctorScanner.Scan(server.Root).Findings, f => f.Kind == FindingKind.MapsSwitchedOff);
+        Assert.Equal(Resolver.FixResourceName, warning.Resources[0].Name);
+        Assert.Equal(Severity.Warning, warning.Severity);
     }
 
     [Fact]
@@ -462,12 +484,13 @@ public class MergeTests
         var result = MapDoctorScanner.Scan(server.Root);
         var copies = result.Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
         Resolver.Apply(Resolver.Plan(result.ResourcesFolder, [], DateTime.Now, [new MergeRequest(copies[1], copies)]), DateTime.Now);
-        File.WriteAllText(copies[0].FullPath, "the map was updated");
+        var combined = Path.Combine(Resolver.FixFolder(result.ResourcesFolder), "stream", copies[0].FileName);
+        File.WriteAllText(combined, "changed by hand");
 
         var saved = Assert.Single(Resolver.FindRecords(result.ResourcesFolder));
         Assert.NotNull(Resolver.WhyCantUndo(saved));
         Assert.Throws<FixException>(() => Resolver.Undo(saved));
-        Assert.Equal("the map was updated", File.ReadAllText(copies[0].FullPath));
+        Assert.Equal("changed by hand", File.ReadAllText(combined));
     }
 }
 
