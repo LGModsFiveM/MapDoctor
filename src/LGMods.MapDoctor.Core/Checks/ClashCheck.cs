@@ -18,7 +18,8 @@ public static class ClashCheck
     public static bool IsFixResource(ResourceInfo r) =>
         FixResourceNames.Any(n => r.Name.Equals(n, StringComparison.OrdinalIgnoreCase));
 
-    public static IEnumerable<Finding> Run(IReadOnlyList<ResourceInfo> resources, CancellationToken cancel = default)
+    // fixes are Map Doctor's own fixes still in place, to tell when a map update has undone or outdated one.
+    public static IEnumerable<Finding> Run(IReadOnlyList<ResourceInfo> resources, IReadOnlyList<FixRecord> fixes, CancellationToken cancel = default)
     {
         var byName = resources
             .Where(r => r.IsStarted)
@@ -41,16 +42,21 @@ public static class ClashCheck
         findings.AddRange(SameFileTwice(resources, hasher, cancel));
         findings.AddRange(ScenarioOverrides(resources, clashes));
 
-        // 1. Clashes a fix resource (e.g. vertex-hub) already takes care of, because it starts last.
+        // 1. Clashes a fix resource (e.g. vertex-hub) already takes care of, because it starts last. Map Doctor's own
+        // combined files are checked against the map copies they were made from, in case a map has changed since.
         var handled = clashes.Where(c => IsFixResource(c.Winner)).ToList();
+        var outOfDate = handled.Select(c => (Clash: c, Why: WhyOutOfDate(c, fixes))).Where(x => x.Why is not null).ToList();
+        foreach (var group in outOfDate.GroupBy(x => x.Clash.Key))
+            findings.Add(OutOfDate(group.Select(x => (x.Clash, x.Why!)).ToList()));
+        handled = handled.Except(outOfDate.Select(x => x.Clash)).ToList();
         foreach (var byFixer in handled.GroupBy(c => c.Winner))
             findings.Add(AlreadyFixed(byFixer.Key, byFixer.ToList()));
 
-        var open = clashes.Except(handled).ToList();
+        var open = clashes.Where(c => !IsFixResource(c.Winner)).ToList();
 
         // 2. Real clashes: different contents, grouped by the set of resources involved.
         foreach (var group in open.Where(c => c.Same == Sameness.Different).GroupBy(c => c.Key))
-            findings.Add(RealClash(group.ToList()));
+            findings.Add(RealClash(group.ToList(), fixes));
 
         // 3. Identical copies are harmless; mention them once so nobody worries.
         var identical = open.Where(c => c.Same != Sameness.Different).ToList();
@@ -60,7 +66,77 @@ public static class ClashCheck
         return findings;
     }
 
-    private static Finding RealClash(List<Clash> clashes)
+    // Why a file Map Doctor combined no longer matches the maps it was made from, or null if it still does.
+    private static string? WhyOutOfDate(Clash clash, IReadOnlyList<FixRecord> fixes)
+    {
+        if (!Resolver.IsOurs(clash.Winner)) return null;
+        // Newest fix first, so this is the combine that made the file there now.
+        var combined = fixes.SelectMany(r => r.Combined).FirstOrDefault(c => c.FileName.Equals(clash.FileName, StringComparison.OrdinalIgnoreCase));
+        if (combined is null) return null;
+
+        var copies = clash.Copies.Where(f => !Resolver.IsOurs(f.Resource)).ToList();
+        List<string> Names(IEnumerable<string> maps) => maps.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        // Fixes made before Map Doctor kept each copy's fingerprint only know which maps were combined.
+        var added = Names(copies.Where(f => combined.Sources.Count > 0
+                ? !combined.Sources.Any(s => SamePath(s.Path, f.FullPath))
+                : !combined.Maps.Contains(f.Resource.Name, StringComparer.OrdinalIgnoreCase))
+            .Select(f => f.Resource.Name));
+        var gone = Names(combined.Sources.Where(s => !copies.Any(f => SamePath(s.Path, f.FullPath))).Select(s => s.Map));
+        var changed = Names(copies
+            .Where(f => combined.Sources.FirstOrDefault(s => SamePath(s.Path, f.FullPath)) is { } s && Resolver.FingerprintOf(f.FullPath) != s.Fingerprint)
+            .Select(f => f.Resource.Name)
+            .Concat(added.Intersect(gone, StringComparer.OrdinalIgnoreCase))); // moved within the map by an update
+
+        string Has(List<string> maps) => maps.Count == 1 ? "has" : "have";
+        var reasons = new List<string>();
+        if (changed.Count > 0) reasons.Add($"{Plain.JoinAnd(changed)} {Has(changed)} changed it since");
+        added = added.Except(changed, StringComparer.OrdinalIgnoreCase).ToList();
+        gone = gone.Except(changed, StringComparer.OrdinalIgnoreCase).ToList();
+        if (added.Count > 0) reasons.Add($"{Plain.JoinAnd(added)} {Has(added)} it now too");
+        if (gone.Count > 0) reasons.Add($"{Plain.JoinAnd(gone)} no longer {(gone.Count == 1 ? "loads" : "load")} it");
+        return reasons.Count == 0 ? null : Plain.JoinAnd(reasons);
+    }
+
+    private static bool SamePath(string a, string b) =>
+        Path.GetFullPath(a).Equals(Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+
+    private static Finding OutOfDate(List<(Clash Clash, string Why)> stale)
+    {
+        var clashes = stale.Select(x => x.Clash).ToList();
+        var maps = clashes[0].Resources.Where(r => !Resolver.IsOurs(r)).Select(r => r.Name).ToList();
+        var whys = stale.Select(x => x.Why).Distinct().ToList();
+        var one = stale.Count == 1;
+
+        return new Finding
+        {
+            Kind = FindingKind.ClashingFiles,
+            Severity = clashes.Min(c => FileTypes.ClashSymptomFor(c.FileName, c.Extension).Severity),
+            Title = one ? $"Map Doctor's combined {clashes[0].FileName} is out of date" : $"{stale.Count} of Map Doctor's combined files are out of date",
+            ShortTitle = one ? "Combined file out of date" : "Combined files out of date",
+            Where = $"Around the {Plain.JoinAndShort(maps, noun: "map")}",
+            WhatsWrong =
+                $"Map Doctor combined {(one ? "this file" : "these files")} for {Plain.JoinAndShort(maps)} earlier, but " +
+                $"{(whys.Count == 1 ? whys[0] : "some of the maps have changed since")}. Players still get the old combined " +
+                $"version, so {(one ? "that change is" : "those changes are")} missing in game.",
+            WhatToDo =
+            [
+                "Fix it to combine the maps' current versions. The old combined version goes to the backup, so you can still undo.",
+                "Or pick one map's version instead.",
+            ],
+            Details = stale.Select(x => $"{x.Clash.FileName}: {x.Why}").ToList(),
+            Resources = clashes[0].Resources,
+            Winner = clashes[0].Winner,
+            Files = FileList(clashes),
+        };
+    }
+
+    private static List<FileClash> FileList(List<Clash> clashes) => clashes
+        .OrderBy(c => FileTypes.ClashSymptomFor(c.FileName, c.Extension).Rank)
+        .ThenBy(c => c.FileName, StringComparer.OrdinalIgnoreCase)
+        .Select(c => new FileClash(c.FileName, c.Extension, FileTypes.Meaning(c.FileName, c.Extension), c.Copies, c.Winner))
+        .ToList();
+
+    private static Finding RealClash(List<Clash> clashes, IReadOnlyList<FixRecord> fixes)
     {
         var resources = clashes[0].Resources;
         var winner = clashes[0].Winner;
@@ -78,6 +154,15 @@ public static class ClashCheck
             $"Only one version of each can load, so {winner.Name} wins because it starts later, " +
             $"and {(losers.Count == 1 ? $"{losers[0]}'s {(clashes.Count == 1 ? "version is" : "versions are")}" : $"the versions in {Plain.JoinAndShort(losers)} are")} ignored.";
 
+        // A copy Map Doctor moved out in an earlier fix is back, which an update or reinstall does.
+        var back = clashes.SelectMany(c => c.Copies)
+            .Where(f => !Resolver.IsOurs(f.Resource) && fixes.Any(r => r.Moves.Any(m => SamePath(m.From, f.FullPath))))
+            .Select(f => f.Resource.Name).Distinct().ToList();
+        if (back.Count > 0)
+            whatsWrong += $" Map Doctor moved {(back.Count == 1 ? $"{back[0]}'s copy" : $"the copies in {Plain.JoinAnd(back)}")} out in an " +
+                          $"earlier fix, but {(back.Count == 1 ? "it's" : "they're")} back, most likely because " +
+                          $"{(back.Count == 1 ? "that map was" : "those maps were")} updated or reinstalled.";
+
         var steps = new List<string>
         {
             $"Check in game around {Plain.JoinAndShort(losers)}. If it looks right, you can ignore this.",
@@ -85,11 +170,7 @@ public static class ClashCheck
             "Or, if you don't need all of these maps, turn one off.",
         };
 
-        var files = clashes
-            .OrderBy(c => FileTypes.ClashSymptomFor(c.FileName, c.Extension).Rank)
-            .ThenBy(c => c.FileName, StringComparer.OrdinalIgnoreCase)
-            .Select(c => new FileClash(c.FileName, c.Extension, FileTypes.Meaning(c.FileName, c.Extension), c.Copies, c.Winner))
-            .ToList();
+        var files = FileList(clashes);
 
         var details = clashes
             .OrderBy(c => FileTypes.ClashRank(c.Extension)).ThenBy(c => c.FileName, StringComparer.OrdinalIgnoreCase)
@@ -133,7 +214,7 @@ public static class ClashCheck
             [
                 $"Keep {fixer.Name} as the last thing in your start-up list.",
                 ours
-                    ? "If you update any of the maps it combines, undo that fix in \"Undo fixes\" and combine them again, so the update is included."
+                    ? "If you update any of the maps it combines, scan again: Map Doctor spots the change and offers to combine them again."
                     : $"If you update any of the maps it combines, rebuild {fixer.Name} so it picks up the changes.",
             ],
             Details = clashes.OrderBy(c => c.FileName, StringComparer.OrdinalIgnoreCase)

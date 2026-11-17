@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using LGMods.MapDoctor.Core.Checks;
+using LGMods.MapDoctor.Core.Fixing;
 using LGMods.MapDoctor.Core.Model;
 using LGMods.MapDoctor.Core.Scanning;
 using LGMods.MapDoctor.Core.Text;
@@ -64,7 +65,7 @@ public static class MapDoctorScanner
         ApplyStartOrder(resources, configFile, findings);
 
         progress?.Report(new ScanProgress("Checking for clashes between maps…", 0.75));
-        findings.AddRange(ClashCheck.Run(resources, cancel));
+        findings.AddRange(ClashCheck.Run(resources, Resolver.FindRecords(resourcesFolder), cancel));
 
         progress?.Report(new ScanProgress("Checking for interiors built in the same spot…", 0.85));
         findings.AddRange(SameSpotCheck.Run(resources, cancel));

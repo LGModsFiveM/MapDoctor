@@ -110,13 +110,15 @@ public sealed class ResolveViewModel : ObservableObject
     {
         get
         {
-            var changed = ChangedGroups;
+            var partly = Groups.Count(g => g.HasStillClashing);
+            var changed = ChangedGroups - partly;
             var ignored = IgnoredGroups;
-            var left = Groups.Count - changed - ignored;
-            if (changed == 0 && !FineChanges.Any())
+            var left = Groups.Count - ChangedGroups - ignored;
+            if (ChangedGroups == 0 && !FineChanges.Any())
                 return "Nothing is set to change yet. Pick a map, or ignore a clash.";
             var parts = new List<string>();
             if (changed > 0) parts.Add(Groups.Count == 1 ? "This clash will be fixed" : $"{changed} of {Groups.Count} clashes will be fixed");
+            if (partly > 0) parts.Add(Groups.Count == 1 ? "This clash will only be partly fixed" : $"{partly} only partly");
             if (ignored > 0) parts.Add(Groups.Count == 1 ? "This clash will be ignored" : $"{ignored} ignored");
             if (left > 0 && Groups.Count > 1) parts.Add($"{left} left as {(left == 1 ? "it is" : "they are")}");
             return string.Join(", ", parts) + ".";
@@ -184,6 +186,12 @@ public sealed class ResolveViewModel : ObservableObject
         : $"{Resolver.FixResourceName} has to start after your maps:";
     public bool HasStartLineNote => StartLineNote is not null;
 
+    // Files left as they are inside a clash you're otherwise fixing: they still clash afterwards.
+    public IReadOnlyList<MoveLine> NotFixed => Groups.Where(g => g.HasStillClashing)
+        .SelectMany(g => g.Files.Where(f => !f.IsChanged).Select(f => new MoveLine(f.FileName, $"only {g.Winner.Name}'s copy loads")))
+        .ToList();
+    public bool HasNotFixed => NotFixed.Count > 0;
+
     public IReadOnlyList<string> Ignoring { get; private set; } = [];
     public bool HasIgnoring => Ignoring.Count > 0;
 
@@ -246,7 +254,9 @@ public sealed class ResolveViewModel : ObservableObject
             return;
         }
 
-        Merges = _plan.Merges.Select(m => new MergeLine(m.FileName, $"for {Plain.JoinAndShort(m.Maps)}", KeptText(m.Result))).ToList();
+        Merges = AllFiles.Where(f => f.Choice.IsMerge)
+            .Select(f => new MergeLine(f.FileName, $"for {Plain.JoinAndShort(f.AllCopies.Where(c => !Resolver.IsOurs(c.Resource)).Select(c => c.Resource.Name).Distinct().ToList())}", f.KeptText))
+            .ToList();
         var byPath = files.ToDictionary(f => f.FullPath, StringComparer.OrdinalIgnoreCase);
         // Combining again can also back up an older combined file; that's ours, so it isn't listed as taken out of a map.
         Moves = _plan.Moves
@@ -268,7 +278,7 @@ public sealed class ResolveViewModel : ObservableObject
         var losers = Moves.Select(m => m.Name).ToList();
         const string undo = "If anything looks wrong afterwards, press \"Undo fixes\" (at the top of your results, or on the start screen) and every file goes back.";
         EffectText = losers.Count == 0
-            ? $"Players get the combined versions, so none of these maps' buildings are hidden. {undo}"
+            ? $"Players get the combined versions, so every one of these maps shows as it should. {undo}"
             : losers.Count == 1
             ? $"Around {losers[0]}, players will get the versions you chose instead. If anything there looks wrong " +
               "afterwards, press \"Undo fixes\" (at the top of your results, or on the start screen) and every file goes back."
@@ -290,7 +300,7 @@ public sealed class ResolveViewModel : ObservableObject
         foreach (var name in new[] { nameof(Moves), nameof(Merges), nameof(HasMerges), nameof(HasMovedOut), nameof(BackupFolder),
                      nameof(EffectText), nameof(LockedText), nameof(HasLockedText), nameof(ConfirmTitle), nameof(ConfirmText),
                      nameof(ApplyLabel), nameof(HasMoves), nameof(Ignoring), nameof(HasIgnoring), nameof(CanAddStartLine),
-                     nameof(StartLineNote), nameof(HasStartLineNote) })
+                     nameof(StartLineNote), nameof(HasStartLineNote), nameof(NotFixed), nameof(HasNotFixed) })
             OnPropertyChanged(name);
     }
 
@@ -323,7 +333,7 @@ public sealed class ResolveViewModel : ObservableObject
         // Ignoring is the same as "Mark as fine" on the results page, and can be undone there.
         foreach (var group in FineChanges.ToList()) group.Finding.IsFine = group.Ignore;
 
-        if (record is not null) _owner.AfterFix(record, needsStartLine: HasMerges && !FixIsRunning && !addLine);
+        if (record is not null) _owner.AfterFix(record, needsStartLine: HasMerges && !FixIsRunning && !addLine, NotFixed.Count);
         else _owner.CloseDialog();
     }
 }
@@ -352,9 +362,11 @@ public sealed class ResolveGroup : ObservableObject
         Title = f.Title;
         DotBrush = finding.DotBrush;
         _symptom = SeverityStyle.Symptom(f.ShortTitle) ?? "problems";
-        var others = Resources.Where(r => r != focus).Select(r => r.Name).ToList();
+        // Map Doctor's own resource is only here when its combined file is out of date; it isn't one of the maps.
+        Maps = Resources.Where(r => !Resolver.IsOurs(r)).ToList();
+        var others = Maps.Where(r => r != focus).Select(r => r.Name).ToList();
         With = focus is null
-            ? $"Between {Plain.JoinAndShort(Resources.Select(r => r.Name).ToList())}"
+            ? $"Between {Plain.JoinAndShort(Maps.Select(r => r.Name).ToList())}"
             : $"Also changed by {Plain.JoinAndShort(others)}";
 
         Options = Resources.Select(r => new GroupOption(this, r, r == focus, r == Winner)).ToList();
@@ -391,6 +403,7 @@ public sealed class ResolveGroup : ObservableObject
 
     public ResourceInfo Winner { get; }
     public IReadOnlyList<ResourceInfo> Resources { get; }
+    public IReadOnlyList<ResourceInfo> Maps { get; }
     public IReadOnlyList<GroupOption> Options { get; }
     public IReadOnlyList<ResolveFile> Files { get; }
     public string Title { get; }
@@ -422,8 +435,8 @@ public sealed class ResolveGroup : ObservableObject
 
     public bool CanMerge => Files.Any(f => f.CanMerge);
     public bool AllCanMerge => Files.All(f => f.CanMerge);
-    public string MergeLabel => Resources.Count == 2 ? "Combine them" : $"Combine all {Resources.Count}";
-    public string MergeTag => AllCanMerge ? "every map works" : "where possible";
+    public string MergeLabel => Maps.Count == 2 ? "Combine them" : $"Combine all {Maps.Count}";
+    public string MergeTag => AllCanMerge ? "every map works" : $"fixes {Files.Count(f => f.CanMerge)} of {Plain.Count(Files.Count, "file")}";
 
     // Combines every file that can be, and leaves the rest as they are.
     public bool Merge
@@ -450,7 +463,8 @@ public sealed class ResolveGroup : ObservableObject
             if (_ignore) return "Ignored. Nothing changes.";
             if (merging.Count > 0)
                 return $"Combines {(merging.Count == 1 ? merging[0].FileName : Plain.Count(merging.Count, "file"))} so " +
-                       $"{(Resources.Count == 2 ? "both maps" : $"all {Resources.Count} maps")} work.";
+                       $"{(Maps.Count == 2 ? "both maps" : $"all {Maps.Count} maps")} work" +
+                       (HasStillClashing ? " there." : ".");
             if (moving.Count == 0)
                 return _focus is not null && Winner == _focus
                     ? $"Nothing changes. {_focus.Name} already shows here."
@@ -469,10 +483,13 @@ public sealed class ResolveGroup : ObservableObject
             var from = Plain.JoinAndShort(moving.Select(m => m.Resource.Name).Distinct().ToList());
             if (_ignore)
                 return "No files change. This clash is marked as fine, so it stops showing as a problem. You can unmark it any time.";
-            if (Files.Any(f => f.Choice.IsMerge))
+            var merged = Files.Where(f => f.Choice.IsMerge && f.Preview is not null).Select(f => f.Preview!).ToList();
+            if (merged.Count > 0)
             {
-                var text = "Only the hiding spots every map agrees on are kept, so none of their buildings vanish. " +
-                           $"The combined version goes in {Resolver.FixResourceName}, so the maps themselves aren't changed.";
+                var text = "";
+                if (merged.Any(m => m.Occlusion)) text += "Only the hiding spots every map agrees on are kept, so none of their buildings vanish. ";
+                if (merged.Any(m => !m.Occlusion)) text += "What each map added, took out or moved is kept, so every map's space stays as its maker built it. ";
+                text += $"The combined version goes in {Resolver.FixResourceName}, so the maps themselves aren't changed.";
                 if (moving.Count > 0) text += $" Also moves {Plain.Count(moving.Count, "file")} out of {from}.";
                 var left = Files.Count(f => !f.IsChanged);
                 if (left > 0) text += $" {Plain.Count(left, "other file")} can't be combined and {(left == 1 ? "stays" : "stay")} as {(left == 1 ? "it is" : "they are")}.";
@@ -491,14 +508,21 @@ public sealed class ResolveGroup : ObservableObject
         get
         {
             var moving = Files.SelectMany(f => f.FilesToMove()).Select(m => m.Resource.Name).Distinct().ToList();
-            var merged = Files.Where(f => f.Choice.IsMerge && f.Preview is not null).Select(f => f.Preview!).ToList();
-            if (merged.Count > 0 && moving.Count == 0)
+            var combined = Files.Where(f => f.Choice.IsMerge && f.Preview is not null).Select(f => f.Preview!).ToList();
+            if (Files.Any(f => f.Choice.IsMerge) && moving.Count == 0)
             {
-                var kept = merged.Sum(m => m.Kept);
-                var total = merged.Sum(m => m.Total);
-                return kept * 2 >= total
-                    ? "Trade-off: GTA draws a little more around here."
-                    : "Trade-off: GTA draws more around here than before, because these maps share few hiding spots.";
+                var text = "";
+                var conflicts = combined.Sum(m => m.Conflicts);
+                var used = Files.Where(f => f.Choice.IsMerge && f.Preview is { Conflicts: > 0 }).Select(f => f.Base.Resource.Name).Distinct().ToList();
+                if (conflicts > 0)
+                    text = $"Trade-off: in {Plain.Count(conflicts, "spot")} the maps changed the same thing in different ways. " +
+                           $"Only one version can load, so {Plain.JoinAnd(used)}'s is used there. ";
+                var occlusion = combined.Where(m => m.Occlusion).ToList();
+                if (occlusion.Count > 0)
+                    text += (text.Length == 0 ? "Trade-off: " : "Also, ") + (occlusion.Sum(m => m.Kept) * 2 >= occlusion.Sum(m => m.Total)
+                        ? "GTA draws a little more around here."
+                        : "GTA draws more around here than before, because these maps share few hiding spots.");
+                return text.TrimEnd();
             }
             if (moving.Count == 0)
             {
@@ -511,6 +535,26 @@ public sealed class ResolveGroup : ObservableObject
     }
 
     public bool HasTradeOff => TradeOff.Length > 0;
+
+    // Fixing part of a clash leaves the other files exactly as they were, so they still clash. Say so plainly.
+    public string? StillClashing
+    {
+        get
+        {
+            var left = Files.Where(f => !f.IsChanged).ToList();
+            if (_ignore || left.Count == 0 || left.Count == Files.Count) return null;
+            var others = Resources.Where(r => r != Winner).Select(r => r.Name).ToList();
+            var one = left.Count == 1;
+            var ignored = others.Count == 1 ? $"{others[0]}'s {(one ? "is" : "are")} ignored" : $"the ones in {Plain.JoinAndShort(others)} are ignored";
+            var reasons = left.Select(f => f.WhyNotCombined).Distinct().ToList();
+            var why = reasons is [{ } reason] ? $" Map Doctor can't combine {(one ? "it" : "them")}: {reason}" : "";
+            return $"Not fixed: {Plain.JoinAndShort(left.Select(f => f.FileName).ToList())} " +
+                   $"{(one ? "still clashes" : "still clash")}.{why} Only {Winner.Name}'s {(one ? "copy loads" : "copies load")}, and {ignored}. " +
+                   $"Pick which map shows for {(one ? "it" : "them")} under Details, or merge {(one ? "it" : "them")} by hand.";
+        }
+    }
+
+    public bool HasStillClashing => StillClashing is not null;
 
     public void ChooseAll(ResourceInfo? resource)
     {
@@ -529,7 +573,7 @@ public sealed class ResolveGroup : ObservableObject
     internal void ChoiceChanged()
     {
         foreach (var o in Options) o.Changed();
-        foreach (var name in new[] { nameof(Selected), nameof(IsMixed), nameof(IsChanged), nameof(Summary), nameof(Effect), nameof(HasEffect), nameof(TradeOff), nameof(HasTradeOff), nameof(Ignore), nameof(Merge) })
+        foreach (var name in new[] { nameof(Selected), nameof(IsMixed), nameof(IsChanged), nameof(Summary), nameof(Effect), nameof(HasEffect), nameof(TradeOff), nameof(HasTradeOff), nameof(StillClashing), nameof(HasStillClashing), nameof(Ignore), nameof(Merge) })
             OnPropertyChanged(name);
         _dialog.ChoiceChanged();
     }
@@ -577,22 +621,25 @@ public sealed class ResolveFile : ObservableObject
             .Select(r => new ResolveOption(this, r == winner ? null : r,
                 r.Name + (r == winner ? " (showing now)" : r == focus ? " (this map)" : "")))
             .ToList();
-        // Can the copies be combined so every map works? Try it now (in memory only) so we know for sure.
-        Base = AllCopies.FirstOrDefault(c => c.Resource == winner)
-               ?? AllCopies.OrderByDescending(c => c.Resource.StartOrder ?? -1).First();
-        if (OcclusionMerge.CanMerge(AllCopies))
+        // Can the copies be combined so every map works? Look inside them now (in memory only) so we know for sure,
+        // and if not, why not. Only the maps' own copies count: an earlier combined one in Map Doctor's resource is
+        // what gets replaced.
+        var mapCopies = AllCopies.Where(c => !Resolver.IsOurs(c.Resource)).ToList();
+        Base = mapCopies.FirstOrDefault(c => c.Resource == winner)
+               ?? mapCopies.OrderByDescending(c => c.Resource.StartOrder ?? -1).First();
+        var maps = mapCopies.Select(c => c.Resource).Distinct().Count();
+        try
         {
-            try
-            {
-                Preview = OcclusionMerge.Merge(Base.FullPath, AllCopies.Where(c => c != Base).Select(c => c.FullPath).ToList());
-                var maps = AllCopies.Select(c => c.Resource).Distinct().Count();
-                Options = Options.Prepend(new ResolveOption(this, null, maps == 2 ? "Combine both" : $"Combine all {maps}", isMerge: true)).ToList();
-            }
-            catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
-            {
-                // Can't be combined after all, so there's just no Combine option.
-            }
+            Preview = maps < 2 ? null : FileMerge.Merge(Base.FullPath, mapCopies.Where(c => c != Base).Select(c => c.FullPath).ToList());
         }
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            WhyNotCombined = e is InvalidDataException ? e.Message : $"Map Doctor can't open every copy of {FileName}.";
+        }
+        if (Preview is not null)
+            Options = Options.Prepend(new ResolveOption(this, null, maps == 2 ? "Combine both" : $"Combine all {maps}", isMerge: true)).ToList();
+        else if (maps < 2)
+            WhyNotCombined = "Only one map has this file now, so there's nothing to combine.";
 
         _choice = (merge && CanMerge ? Options.First(o => o.IsMerge) : null)
                   ?? Options.FirstOrDefault(o => o.Resource is not null && o.Resource == initial)
@@ -605,6 +652,8 @@ public sealed class ResolveFile : ObservableObject
     // What combining would keep, worked out in memory (null if it can't be combined).
     public MergedFile? Preview { get; }
     public bool CanMerge => Preview is not null;
+    public string? WhyNotCombined { get; }
+    public bool HasWhyNotCombined => WhyNotCombined is not null;
 
     private ResolveOption Leave => Options.First(o => o.Resource is null && !o.IsMerge);
 
@@ -625,7 +674,37 @@ public sealed class ResolveFile : ObservableObject
     public IReadOnlyList<StreamFile> AllCopies { get; }
     public IReadOnlyList<ResolveOption> Options { get; }
     public ResolveOption Choice => _choice;
-    public string KeptText => Preview is { } p ? ResolveViewModel.KeptText(p) : "";
+    public string KeptText => Preview is not { } p ? ""
+        : p.Occlusion ? ResolveViewModel.KeptText(p)
+        : ChangesText(p);
+
+    private string ChangesText(MergedFile p)
+    {
+        var what = p.Lights ? "distant light" : "object";
+        var changes = p.Changes
+            .Select(c => (Map: AllCopies.First(a => a.FullPath == c.Key).Resource.Name, Did: Did(c.Value, what)))
+            .Where(c => c.Did.Count > 0)
+            .Select(c => $"{c.Map} {Plain.JoinAnd(c.Did)}")
+            .ToList();
+        var text = changes.Count == 0
+            ? "The copies only differ by a few small nudges, so nothing is lost."
+            : $"Keeps what each map changed: {string.Join("; ", changes)}.";
+        if (p.Nudged > 0)
+            text += $" {Plain.Count(p.Nudged, "object")} saved less than a metre apart {(p.Nudged == 1 ? "uses" : "use")} {Base.Resource.Name}'s position.";
+        if (p.Conflicts > 0)
+            text += $" In {Plain.Count(p.Conflicts, "spot")} the maps changed the same thing in different ways, so {Base.Resource.Name}'s version is used there.";
+        return text;
+    }
+
+    private static List<string> Did(MapChanges c, string what)
+    {
+        var did = new List<string>();
+        if (c.Hidden > 0) did.Add($"takes out {Plain.Count(c.Hidden, what)}");
+        if (c.Added > 0) did.Add($"adds {Plain.Count(c.Added, what)}");
+        if (c.Changed > 0) did.Add($"moves or changes {Plain.Count(c.Changed, what)}");
+        if (c.Extras > 0) did.Add($"changes {Plain.Count(c.Extras, "parked car or lighting zone", "parked cars or lighting zones")}");
+        return did;
+    }
 
     // Choosing the map that's showing now is the same as leaving the file alone.
     public void Choose(ResourceInfo? resource) =>
@@ -641,6 +720,12 @@ public sealed class ResolveFile : ObservableObject
         option.Changed();
         OnPropertyChanged(nameof(Choice));
         _group.FileChosen();
+
+        // Distant-light files come in pairs that have to match, so the partner follows.
+        if (!LightsMerge.IsLights(FileName)) return;
+        var partnerName = LightsMerge.Partner(FileName);
+        if (_group.Files.FirstOrDefault(f => f.FileName.Equals(partnerName, StringComparison.OrdinalIgnoreCase)) is { } partner)
+            partner.Select(partner.Options.FirstOrDefault(o => o.IsMerge == option.IsMerge && o.Resource == option.Resource) ?? partner.Leave);
     }
 
     public IEnumerable<StreamFile> FilesToMove() =>
@@ -689,9 +774,12 @@ public sealed class FixNotice : ObservableObject
         }
     }
 
-    public static FixNotice Fixed(MainViewModel main, FixRecord record, bool needsStartLine = false) => new(
-        FixedTitle(record),
-        needsStartLine
+    public static FixNotice Fixed(MainViewModel main, FixRecord record, bool needsStartLine = false, int notFixed = 0) => new(
+        FixedTitle(record, notFixed),
+        notFixed > 0
+            ? $"{Plain.Count(notFixed, "file")} {(notFixed == 1 ? "wasn't" : "weren't")} fixed and still {(notFixed == 1 ? "clashes" : "clash")}, so {(notFixed == 1 ? "it's" : "they're")} still listed below. " +
+              (needsStartLine ? $"Add \"{Resolver.StartLine}\" as the last line of your server.cfg, then restart your server." : "Restart your server so players get the change.")
+            : needsStartLine
             ? $"Add \"{Resolver.StartLine}\" as the last line of your server.cfg, then restart your server so players get the change. " +
               "Changed your mind? Undo takes it all back out."
             : record.Combined.Count > 0
@@ -701,12 +789,13 @@ public sealed class FixNotice : ObservableObject
 
     private static bool IsOwn(FileMove m) => m.ResourceName.Equals(Resolver.FixResourceName, StringComparison.OrdinalIgnoreCase);
 
-    private static string FixedTitle(FixRecord record)
+    private static string FixedTitle(FixRecord record, int notFixed)
     {
         var combined = record.Combined.Count;
         var moved = record.Moves.Count(m => !IsOwn(m));
         return (combined > 0, moved > 0) switch
         {
+            (true, false) when notFixed > 0 => $"Combined {Plain.Count(combined, "file")}, {Plain.Count(notFixed, "file")} still {(notFixed == 1 ? "clashes" : "clash")}",
             (true, false) => $"Combined {Plain.Count(combined, "file")} so every map works",
             (true, true) => $"Combined {Plain.Count(combined, "file")} and moved {Plain.Count(moved, "file")} to a backup",
             _ => $"Moved {Plain.Count(moved, "file")} to a backup",

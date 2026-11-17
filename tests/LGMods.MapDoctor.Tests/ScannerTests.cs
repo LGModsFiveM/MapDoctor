@@ -4,6 +4,7 @@ using LGMods.MapDoctor.Core;
 using LGMods.MapDoctor.Core.Model;
 using LGMods.MapDoctor.Core.Scanning;
 using LGMods.MapDoctor.Core.Fixing;
+using LGMods.MapDoctor.Core.Reading;
 using LGMods.MapDoctor.Core.Text;
 
 namespace LGMods.MapDoctor.Tests;
@@ -393,12 +394,12 @@ public class MergeTests
         using var server = TwoMapsInOneArea();
         var copies = MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
 
-        Assert.True(OcclusionMerge.CanMerge(copies));
-        var merged = OcclusionMerge.Merge(copies[1].FullPath, [copies[0].FullPath]);
+        var merged = FileMerge.Merge(copies[1].FullPath, [copies[0].FullPath]);
 
         // Shop and Bank were each removed by one map, so neither comes back. Tower counts as the same box.
-        Assert.Equal(2, merged.KeptBoxes);
-        Assert.Equal(3, merged.TotalBoxes);
+        Assert.False(merged.Objects);
+        Assert.Equal(2, merged.Kept);
+        Assert.Equal(3, merged.Total);
         Assert.Equal(2, GameFiles.BoxCount(merged.Bytes));
     }
 
@@ -411,7 +412,7 @@ public class MergeTests
             .Config("ensure a\nensure b\n");
         var copies = MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
 
-        var merged = OcclusionMerge.Merge(copies[1].FullPath, [copies[0].FullPath]);
+        var merged = FileMerge.Merge(copies[1].FullPath, [copies[0].FullPath]);
 
         Assert.Equal(0, merged.Kept);
         Assert.Equal(0, GameFiles.BoxCount(merged.Bytes));
@@ -426,7 +427,240 @@ public class MergeTests
             .Config("ensure a\nensure b\n");
         var copies = MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
 
-        Assert.False(OcclusionMerge.CanMerge(copies));
+        Assert.Throws<InvalidDataException>(() => FileMerge.Merge(copies[1].FullPath, [copies[0].FullPath]));
+    }
+
+    private static readonly Vector3 Kerb = new(10, 10, 20), Lamp = new(20, 10, 21), Bench = new(30, 10, 20), Sign = new(40, 10, 22);
+    private static readonly Vector3 Sunk = new(0, 0, -40);
+
+    // Two copies of a road file, with "a" loading first and "b" loading last (the base).
+    private static IReadOnlyList<Core.Model.StreamFile> RoadCopies(FakeServer server, byte[] a, byte[] b)
+    {
+        server.Resource("a").Bytes("a/stream/lr_rd_1.ymap", a)
+            .Resource("b").Bytes("b/stream/lr_rd_1.ymap", b)
+            .Config("ensure a\nensure b\n");
+        return MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
+    }
+
+    // The last copy loads now and is the base; the others are combined into it.
+    private static MergedFile MergeRoads(params byte[][] copies)
+    {
+        using var server = new FakeServer();
+        for (var i = 0; i < copies.Length; i++)
+            server.Resource($"m{i}").Bytes($"m{i}/stream/lr_rd_1.ymap", copies[i]);
+        server.Config(string.Concat(copies.Select((_, i) => $"ensure m{i}\n")));
+        var paths = Enumerable.Range(0, copies.Length).Select(i => Path.Combine(server.Resources, $"m{i}", "stream", "lr_rd_1.ymap")).ToList();
+        return FileMerge.Merge(paths[^1], paths[..^1]);
+    }
+
+    private static int[] Hidden(MergedFile merged) => merged.Changes.Values.Select(c => c.Hidden).ToArray();
+
+    [Fact]
+    public void Objects_each_map_sank_out_of_sight_all_stay_sunk()
+    {
+        // a sank the kerb, b sank the sign; the lamp and bench are untouched in both.
+        var merged = MergeRoads(GameFiles.Objects(Kerb + Sunk, Lamp, Bench, Sign), GameFiles.Objects(Kerb, Lamp, Bench, Sign + Sunk));
+
+        Assert.True(merged.Objects);
+        Assert.Equal([Kerb + Sunk, Lamp, Bench, Sign + Sunk], GameFiles.Positions(merged.Bytes));
+        Assert.Equal([1, 1], Hidden(merged));
+        // The area it streams in covers the sunk objects from both copies.
+        var (min, max) = GameFiles.Extents(merged.Bytes);
+        Assert.Equal((Kerb + Sunk).Z, min.Z);
+        Assert.Equal(Sign.Z, max.Z);
+    }
+
+    [Fact]
+    public void Objects_saved_a_few_centimetres_apart_keep_the_loading_copy()
+    {
+        var merged = MergeRoads(GameFiles.Objects(Kerb, Lamp + new Vector3(0, 0, 0.3f), Bench), GameFiles.Objects(Kerb, Lamp, Bench));
+
+        Assert.Equal([Kerb, Lamp, Bench], GameFiles.Positions(merged.Bytes));
+        Assert.Equal(1, merged.Nudged);
+    }
+
+    [Fact]
+    public void Objects_both_maps_moved_differently_keep_the_loading_copy_and_say_so()
+    {
+        var merged = MergeRoads(GameFiles.Objects(Kerb, Lamp + new Vector3(5, 0, 0), Bench), GameFiles.Objects(Kerb, Lamp + new Vector3(0, 5, 0), Bench));
+
+        Assert.Equal([Kerb, Lamp + new Vector3(0, 5, 0), Bench], GameFiles.Positions(merged.Bytes));
+        Assert.Equal(1, merged.Conflicts);
+    }
+
+    [Fact]
+    public void Objects_one_map_took_out_stay_out_and_objects_one_map_added_stay_in()
+    {
+        // The first map took the lamp out of the middle of the list; the second added a sign at the end.
+        var merged = MergeRoads(GameFiles.Objects(("kerb", Kerb), ("bench", Bench)),
+            GameFiles.Objects(("kerb", Kerb), ("lamp", Lamp), ("bench", Bench), ("sign", Sign)));
+
+        Assert.Equal([Kerb, Bench, Sign], GameFiles.Positions(merged.Bytes));
+        var (first, second) = (merged.Changes.Values.ElementAt(1), merged.Changes.Values.ElementAt(0));
+        Assert.Equal((1, 0), (first.Hidden, first.Added));
+        Assert.Equal((0, 1), (second.Hidden, second.Added));
+        Assert.Equal(0, merged.Conflicts);
+    }
+
+    [Fact]
+    public void Objects_hidden_by_drawing_only_from_a_metre_away_count_as_hidden()
+    {
+        var shy = GameFiles.Objects(Kerb, Lamp - new Vector3(0, 0, 3), Bench);
+        var meta = MetaFile.Parse(shy)!;
+        var data = meta.CopyData();
+        var lamp = meta.Items(MetaFile.Hash("CEntityDef"), 128).ElementAt(1);
+        BitConverter.GetBytes(1f).CopyTo(data, lamp + 76);
+        shy = meta.Save(data);
+
+        var merged = MergeRoads(shy, GameFiles.Objects(Kerb, Lamp, Bench));
+
+        Assert.Equal([Kerb, Lamp - new Vector3(0, 0, 3), Bench], GameFiles.Positions(merged.Bytes));
+        Assert.Equal(0, merged.Conflicts);
+    }
+
+    [Fact]
+    public void A_copy_saved_again_by_another_tool_counts_as_unchanged()
+    {
+        var plain = GameFiles.Objects(Kerb, Lamp, Bench);
+        var merged = MergeRoads(GameFiles.Resaved(GameFiles.Objects(Kerb + Sunk, Lamp, Bench)), plain);
+
+        Assert.Equal([Kerb + Sunk, Lamp, Bench], GameFiles.Positions(merged.Bytes));
+        Assert.Equal(0, merged.Conflicts);
+        Assert.Equal([0, 1], Hidden(merged));
+    }
+
+    [Fact]
+    public void With_three_or_more_copies_the_odd_one_out_is_the_change()
+    {
+        // Only the first map moved the lamp, so its move is kept even though it doesn't load last.
+        var moved = Lamp + new Vector3(4, 0, 0);
+        var merged = MergeRoads(GameFiles.Objects(Kerb, moved, Bench), GameFiles.Objects(Kerb, Lamp, Bench), GameFiles.Objects(Kerb, Lamp, Bench));
+        Assert.Equal([Kerb, moved, Bench], GameFiles.Positions(merged.Bytes));
+        Assert.Equal(0, merged.Conflicts);
+
+        // Two of three have the sign at the end, so the one without it took it out (with two copies, an object at the
+        // end of the list reads as added).
+        merged = MergeRoads(GameFiles.Objects(("kerb", Kerb), ("lamp", Lamp)), GameFiles.Objects(("kerb", Kerb), ("lamp", Lamp), ("sign", Sign)),
+            GameFiles.Objects(("kerb", Kerb), ("lamp", Lamp), ("sign", Sign)));
+        Assert.Equal([Kerb, Lamp], GameFiles.Positions(merged.Bytes));
+    }
+
+    [Fact]
+    public void Sunk_is_judged_by_the_ground_nearby_not_the_whole_file()
+    {
+        // A hillside 300 m up, far from the road: an object 20 m under the road is sunk, one on the hill isn't.
+        var hill = new Vector3(1000, 0, 300);
+        var low = Kerb - new Vector3(0, 0, 20);
+        var road = new[] { Kerb, Lamp, Bench, Sign, Kerb + new Vector3(0, 5, 0), hill, hill + new Vector3(5, 0, 0) };
+        var merged = MergeRoads(GameFiles.Objects([.. road.Select((p, i) => i == 0 ? low : p)]), GameFiles.Objects(road));
+
+        Assert.Equal(low, GameFiles.Positions(merged.Bytes)[0]);
+        Assert.Equal([0, 1], Hidden(merged));
+    }
+
+    [Fact]
+    public void Distant_lights_from_every_map_are_kept_in_the_same_order_in_both_files()
+    {
+        Vector3 a = new(1, 2, 3), b = new(4, 5, 6), c = new(7, 8, 9);
+        using var server = new FakeServer()
+            .Resource("one").Bytes("one/stream/vw_distlodlights_small001.ymap", GameFiles.Lights(true, a, b))
+            .Resource("one").Bytes("one/stream/vw_lodlights_small001.ymap", GameFiles.Lights(false, a, b))
+            .Resource("two").Bytes("two/stream/vw_distlodlights_small001.ymap", GameFiles.Lights(true, a, c))
+            .Resource("two").Bytes("two/stream/vw_lodlights_small001.ymap", GameFiles.Lights(false, a, c))
+            .Config("ensure one\nensure two\n");
+        var result = MapDoctorScanner.Scan(server.Root);
+        var files = result.Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files;
+        var distant = files.Single(f => f.FileName.Contains("dist")).Copies;
+
+        // Asking for one of the pair combines both.
+        var plan = Resolver.Plan(result.ResourcesFolder, [], DateTime.Now, [new MergeRequest(distant.Single(c => c.Resource.Name == "two"), distant)]);
+        Assert.Equal(2, plan.Merges.Count);
+
+        var positions = GameFiles.LightPositions(plan.Merges.Single(m => m.FileName.Contains("dist")).Result.Bytes);
+        Assert.Equal([a, c, b], positions);
+        Assert.Equal(positions.Select(GameFiles.LightHash), GameFiles.LightHashes(plan.Merges.Single(m => !m.FileName.Contains("dist")).Result.Bytes));
+    }
+
+    [Fact]
+    public void Collision_files_say_why_they_cant_be_combined()
+    {
+        using var server = new FakeServer()
+            .Resource("a").File("a/stream/lr_rd_1.ybn", "first")
+            .Resource("b").File("b/stream/lr_rd_1.ybn", "second")
+            .Config("ensure a\nensure b\n");
+        var copies = MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
+
+        var why = Assert.Throws<InvalidDataException>(() => FileMerge.Merge(copies[1].FullPath, [copies[0].FullPath])).Message;
+        Assert.Contains("only map placement files can be combined", why);
+    }
+
+    [Fact]
+    public void A_map_update_after_combining_shows_the_combined_file_is_out_of_date_and_it_can_be_combined_again()
+    {
+        using var server = TwoMapsInOneArea();
+        var result = MapDoctorScanner.Scan(server.Root);
+        var copies = result.Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
+        Resolver.Apply(Resolver.Plan(result.ResourcesFolder, [], DateTime.Now, [new MergeRequest(copies.Single(c => c.Resource.Name == "garage"), copies)],
+            result.StartListFile) with { AddStartLine = true }, DateTime.Now);
+        Assert.Contains(MapDoctorScanner.Scan(server.Root).Findings, f => f.Kind == FindingKind.AlreadyFixed);
+
+        // The estate is updated and now hides the bank too.
+        server.Bytes("[maps]/estate/stream/lr_sc1_occl_00.ymap", GameFiles.Occlusion(Shop, Bank, Tower, Car));
+        var after = MapDoctorScanner.Scan(server.Root);
+        var stale = after.Findings.Single(f => f.Kind == FindingKind.ClashingFiles);
+        Assert.Contains("out of date", stale.Title);
+        Assert.Contains("estate has changed it since", stale.WhatsWrong);
+        Assert.Equal(Resolver.FixResourceName, stale.Winner!.Name);
+        Assert.DoesNotContain(after.Findings, f => f.Kind == FindingKind.AlreadyFixed);
+
+        // Combining again uses the maps' current copies, not the old combined one, which goes to the backup.
+        var now = stale.Files[0].Copies;
+        var plan = Resolver.Plan(after.ResourcesFolder, [], DateTime.Now.AddSeconds(1),
+            [new MergeRequest(now.Single(c => c.Resource.Name == "garage"), now)]);
+        Assert.Equal(["estate", "garage"], plan.Merges[0].Maps.Order());
+        Assert.Equal(3, plan.Merges[0].Result.Kept); // bank, tower and car are in both now
+        Assert.Single(plan.Moves, m => m.ResourceName == Resolver.FixResourceName);
+        Resolver.Apply(plan, DateTime.Now.AddSeconds(1));
+
+        var fixedAgain = MapDoctorScanner.Scan(server.Root);
+        Assert.DoesNotContain(fixedAgain.Findings, f => f.Kind == FindingKind.ClashingFiles);
+        Assert.Contains(fixedAgain.Findings, f => f.Kind == FindingKind.AlreadyFixed);
+
+        // Undoing the second combine puts the first one back, which is out of date again (however the path is written).
+        var newest = Resolver.FindRecords(after.ResourcesFolder.Replace(Path.DirectorySeparatorChar, '/'))[0];
+        Assert.Null(Resolver.WhyCantUndo(newest));
+        Resolver.Undo(newest);
+        Assert.Contains("out of date", MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Title);
+    }
+
+    [Fact]
+    public void A_new_map_with_a_combined_file_shows_it_is_out_of_date()
+    {
+        using var server = TwoMapsInOneArea();
+        var result = MapDoctorScanner.Scan(server.Root);
+        var copies = result.Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies;
+        Resolver.Apply(Resolver.Plan(result.ResourcesFolder, [], DateTime.Now, [new MergeRequest(copies.Single(c => c.Resource.Name == "garage"), copies)],
+            result.StartListFile) with { AddStartLine = true }, DateTime.Now);
+
+        server.Resource("[maps]/bakery").Bytes("[maps]/bakery/stream/lr_sc1_occl_00.ymap", GameFiles.Occlusion(Tower, Car));
+        var stale = MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles);
+
+        Assert.Contains("bakery has it now too", stale.WhatsWrong);
+    }
+
+    [Fact]
+    public void A_file_moved_out_that_comes_back_with_an_update_says_why_the_clash_is_back()
+    {
+        using var server = TwoMapsInOneArea();
+        var result = MapDoctorScanner.Scan(server.Root);
+        var estate = result.Findings.Single(f => f.Kind == FindingKind.ClashingFiles).Files[0].Copies.Single(c => c.Resource.Name == "estate");
+        Resolver.Apply(Resolver.Plan(result.ResourcesFolder, [estate], DateTime.Now), DateTime.Now);
+        Assert.DoesNotContain(MapDoctorScanner.Scan(server.Root).Findings, f => f.Kind == FindingKind.ClashingFiles);
+
+        server.Bytes("[maps]/estate/stream/lr_sc1_occl_00.ymap", GameFiles.Occlusion(Shop, Tower));
+        var back = MapDoctorScanner.Scan(server.Root).Findings.Single(f => f.Kind == FindingKind.ClashingFiles);
+
+        Assert.Contains("estate's copy out in an earlier fix, but it's back", back.WhatsWrong);
     }
 
     [Fact]

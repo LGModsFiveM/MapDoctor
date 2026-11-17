@@ -1,14 +1,7 @@
 using System.Buffers.Binary;
-using LGMods.MapDoctor.Core.Model;
 using LGMods.MapDoctor.Core.Reading;
 
 namespace LGMods.MapDoctor.Core.Fixing;
-
-public sealed record MergedFile(byte[] Bytes, int KeptBoxes, int TotalBoxes, int KeptModels, int TotalModels)
-{
-    public int Kept => KeptBoxes + KeptModels;
-    public int Total => TotalBoxes + TotalModels;
-}
 
 // Combines clashing "_occl" .ymap files (which tell GTA what it can skip drawing because something is in front)
 // so every map works, not just the one that loads.
@@ -36,10 +29,7 @@ public static class OcclusionMerge
     private const int BoxTolerance = 2;      // in GTA's units (a quarter of a metre for positions)
     private const float ModelTolerance = 0.25f; // metres
 
-    public static bool CanMerge(IReadOnlyList<StreamFile> copies) =>
-        copies.Count > 1
-        && copies.All(c => c.Extension.Equals(".ymap", StringComparison.OrdinalIgnoreCase))
-        && copies.All(c => Open(c.FullPath) is not null);
+    public static bool IsOcclusion(string path) => Open(path) is not null;
 
     // basePath is the copy that loads now.
     public static MergedFile Merge(string basePath, IReadOnlyList<string> otherPaths)
@@ -62,7 +52,7 @@ public static class OcclusionMerge
         // Read it back the way the scanner does, so a file we can't read never reaches a server.
         if (MetaFile.Parse(bytes) is not { } check || Open(check, mustHaveOccluders: false) is null)
             throw new InvalidDataException("The combined file didn't check out.");
-        return new MergedFile(bytes, keptBoxes.Count, mainBoxes.Count, keptModels.Count, mainModels.Count);
+        return new MergedFile(bytes) { Kept = keptBoxes.Count + keptModels.Count, Total = mainBoxes.Count + mainModels.Count };
     }
 
     private sealed record Occlusion(MetaFile File, int Header);

@@ -91,6 +91,124 @@ public static class GameFiles
         return builder.Build();
     }
 
+    // Like GTA's road and prop files: a header, the placed objects, and the list of pointers to them.
+    // Object i is "prop{i}" with id i + 1, so copies saved from the same file line up.
+    public static byte[] Objects(params Vector3[] positions) => Objects(positions.Select((p, i) => ($"prop{i}", p)).ToArray());
+
+    // Each object's name is its model, and its guid comes from the name, like the game's own files.
+    public static byte[] Objects(params (string Name, Vector3 At)[] objects)
+    {
+        var positions = objects.Select(o => o.At).ToArray();
+        var header = new byte[512];
+        var items = new byte[128 * positions.Length];
+        var pointers = new byte[8 * positions.Length];
+        for (var i = 0; i < positions.Length; i++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(items.AsSpan(128 * i + 8), MetaFile.Hash(objects[i].Name));
+            BinaryPrimitives.WriteUInt32LittleEndian(items.AsSpan(128 * i + 16), MetaFile.Hash(objects[i].Name + "guid"));
+            Vector(items, 128 * i + 32, positions[i]);
+            BinaryPrimitives.WriteSingleLittleEndian(items.AsSpan(128 * i + 60), 1); // facing the default way
+            BinaryPrimitives.WriteSingleLittleEndian(items.AsSpan(128 * i + 64), 1);
+            BinaryPrimitives.WriteSingleLittleEndian(items.AsSpan(128 * i + 68), 1);
+            BinaryPrimitives.WriteUInt32LittleEndian(pointers.AsSpan(8 * i), 2u | (uint)(128 * i) << 12);
+        }
+        var min = positions.Aggregate(Vector3.Min);
+        var max = positions.Aggregate(Vector3.Max);
+        Vector(header, 0x20, min);
+        Vector(header, 0x30, max);
+        Vector(header, 0x40, min);
+        Vector(header, 0x50, max);
+
+        var builder = new Builder();
+        builder.Add(MetaFile.Hash("CMapData"), header);     // block 1
+        builder.Add(MetaFile.Hash("CEntityDef"), items);    // block 2
+        builder.Add(7, pointers);                           // block 3: the entity list points at each object
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(0x60), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(0x68), (ushort)positions.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(0x6A), (ushort)positions.Length);
+        return builder.Build();
+    }
+
+    // The same file as another tool saves it: new guids, the rotation written as its negative (the same turn),
+    // rounding in the last digit and filler in the unused slot.
+    public static byte[] Resaved(byte[] file)
+    {
+        var meta = MetaFile.Parse(file)!;
+        var data = meta.CopyData();
+        foreach (var at in meta.Items(MetaFile.Hash("CEntityDef"), 128))
+        {
+            var span = data.AsSpan(at);
+            BinaryPrimitives.WriteUInt32LittleEndian(span[16..], BinaryPrimitives.ReadUInt32LittleEndian(span[16..]) ^ 0x5A5A5A5A);
+            BinaryPrimitives.WriteUInt32LittleEndian(span[44..], 0x7F800001);
+            for (var n = 0; n < 4; n++)
+                BinaryPrimitives.WriteSingleLittleEndian(span[(48 + 4 * n)..], -BinaryPrimitives.ReadSingleLittleEndian(span[(48 + 4 * n)..]));
+            BinaryPrimitives.WriteSingleLittleEndian(span[64..], 0.99999994f);
+        }
+        return meta.Save(data);
+    }
+
+    // One of a distant-light pair: distlodlights holds where each light is, lodlights how it shines (here, a hash
+    // made from where it is, so tests can check both files list the lights in the same order).
+    public static byte[] Lights(bool distant, params Vector3[] lights)
+    {
+        var header = new byte[512];
+        var builder = new Builder();
+        builder.Add(MetaFile.Hash("CMapData"), header);
+        void List(int field, int size, Func<Vector3, byte[]> item)
+        {
+            var block = builder.Add(0x15, lights.SelectMany(item).ToArray());
+            BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(field), (uint)block);
+            BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(field + 8), (ushort)lights.Length);
+            BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(field + 10), (ushort)lights.Length);
+        }
+        byte[] Bytes(int size, uint value) => BitConverter.GetBytes(value).Concat(new byte[12]).Take(size).ToArray();
+        if (distant)
+        {
+            List(0x190, 12, l => { var b = new byte[12]; Vector(b, 0, l); return b; });
+            List(0x1A0, 4, _ => Bytes(4, 0xFFFFFFFF));
+        }
+        else
+            foreach (var (field, size) in new[] { (0x108, 12), (0x118, 4), (0x128, 4), (0x138, 4), (0x148, 4), (0x158, 1), (0x168, 1), (0x178, 1) })
+                List(field, size, l => Bytes(size, field == 0x148 ? LightHash(l) : 0));
+        var min = lights.Aggregate(Vector3.Min);
+        var max = lights.Aggregate(Vector3.Max);
+        Vector(header, 0x20, min);
+        Vector(header, 0x30, max);
+        Vector(header, 0x40, min);
+        Vector(header, 0x50, max);
+        return builder.Build();
+    }
+
+    public static uint LightHash(Vector3 at) => MetaFile.Hash($"{at.X},{at.Y},{at.Z}");
+
+    public static List<Vector3> LightPositions(byte[] file) =>
+        LightList(file, 0x190, 12, (m, at) => m.Vector(at)).ToList();
+
+    public static List<uint> LightHashes(byte[] file) =>
+        LightList(file, 0x148, 4, (m, at) => m.U32(at)).ToList();
+
+    private static IEnumerable<T> LightList<T>(byte[] file, int field, int size, Func<MetaFile, int, T> read)
+    {
+        var meta = MetaFile.Parse(file)!;
+        var header = meta.Items(MetaFile.Hash("CMapData"), 512).Single();
+        return meta.Array(header + field, meta.ArrayAt(header + field)!.Value.Type, size).Select(at => read(meta, at));
+    }
+
+    public static List<Vector3> Positions(byte[] file)
+    {
+        var meta = MetaFile.Parse(file) ?? throw new InvalidDataException("Not readable");
+        var header = meta.Items(MetaFile.Hash("CMapData"), 512).Single();
+        return meta.Array(header + 0x60, meta.ArrayAt(header + 0x60)!.Value.Type, 8)
+            .Select(pointer => meta.Vector(meta.Pointer(pointer, 128)!.Value.At + 32)).ToList();
+    }
+
+    public static (Vector3 Min, Vector3 Max) Extents(byte[] file)
+    {
+        var meta = MetaFile.Parse(file) ?? throw new InvalidDataException("Not readable");
+        var header = meta.Items(MetaFile.Hash("CMapData"), 512).Single();
+        return (meta.Vector(header + 0x20), meta.Vector(header + 0x30));
+    }
+
     public static int BoxCount(byte[] file)
     {
         var meta = MetaFile.Parse(file) ?? throw new InvalidDataException("Not readable");

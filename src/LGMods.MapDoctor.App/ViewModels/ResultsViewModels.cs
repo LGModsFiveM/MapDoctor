@@ -255,8 +255,8 @@ public sealed class ResultsViewModel : ObservableObject
         return null;
     }
 
-    public void AfterFix(Core.Fixing.FixRecord record, bool needsStartLine) =>
-        _ = _main.RescanAsync(Folder, CurrentView(), FixNotice.Fixed(_main, record, needsStartLine));
+    public void AfterFix(Core.Fixing.FixRecord record, bool needsStartLine, int notFixed) =>
+        _ = _main.RescanAsync(Folder, CurrentView(), FixNotice.Fixed(_main, record, needsStartLine, notFixed));
 
     public ViewState CurrentView() => new(IsMapView, SelectedMap?.Name, Selected?.Finding.Key);
 
@@ -819,6 +819,7 @@ public sealed class IssueCard
             : $"{who} include {Plain.JoinAnd(f.Files.Select(x => FileTypes.Things(x.Extension)).Distinct())} with the same names.";
 
         if (f.Winner is not { } winner) return $"{what} Only one copy of each file can load.";
+        if (Core.Fixing.Resolver.IsOurs(winner)) return f.WhatsWrong; // Map Doctor's combined file, out of date
 
         string Pos(ResourceInfo r) => r.StartOrder is { } n ? MapViewModel.Ordinal(n + 1) : "not started";
         string load;

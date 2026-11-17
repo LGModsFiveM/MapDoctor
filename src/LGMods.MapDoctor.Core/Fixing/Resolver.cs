@@ -12,10 +12,20 @@ public sealed record FileMove(string ResourceName, string FileName, string From,
 public sealed record MergeRequest(StreamFile Base, IReadOnlyList<StreamFile> Copies);
 
 // Path is where the combined file goes, in Map Doctor's own resource.
-public sealed record MergeSummary(string FileName, IReadOnlyList<string> Maps, MergedFile Result, string Path);
+public sealed record MergeSummary(string FileName, IReadOnlyList<string> Maps, MergedFile Result, string Path)
+{
+    public IReadOnlyList<CombinedSource> Sources { get; init; } = [];
+}
 
-// The fingerprint tells undo the file is still the one we wrote, so it's ours to take away.
-public sealed record CombinedFile(string FileName, string Path, string Fingerprint, IReadOnlyList<string> Maps);
+// The fingerprint tells undo the file is still the one we wrote, so it's ours to take away. Sources are the map
+// copies it was made from, so a scan can tell when a map update has left it out of date.
+public sealed record CombinedFile(string FileName, string Path, string Fingerprint, IReadOnlyList<string> Maps)
+{
+    public IReadOnlyList<CombinedSource> Sources { get; init; } = [];
+}
+
+// Path is relative to the resources folder in the saved record, and full once read back.
+public sealed record CombinedSource(string Map, string Path, string Fingerprint);
 
 public sealed record FixPlan(string BackupFolder, IReadOnlyList<FileMove> Moves)
 {
@@ -54,13 +64,15 @@ public static class Resolver
     private const string StartLineNote = "# Added by LGMods Map Doctor, so its combined map files load after your maps";
 
     private const string Manifest = """
-        -- Made by LGMods Map Doctor: combined versions of map files that clash, so every map works.
-        -- To take it away, scan in Map Doctor and press "Undo fixes", or delete this folder and its line in server.cfg.
-        -- It needs to start after your maps, so keep "ensure LGMods_MapDoctor" at the end of server.cfg.
-
         fx_version 'cerulean'
         game 'gta5'
+
+        author 'LGMods'
+        description 'LGMods Map Doctor: combined map files, so every map works'
+
         this_is_a_map 'yes'
+
+        -- Keep "ensure LGMods_MapDoctor" as the last line of server.cfg, so these load after your maps.
 
         """;
 
@@ -84,13 +96,23 @@ public static class Resolver
         var fixFolder = FixFolder(resourcesFolder);
         var summaries = new List<MergeSummary>();
         var moves = new List<FileMove>();
-        foreach (var merge in merges ?? [])
+        var requests = (merges ?? []).ToList();
+        // Distant-light files come in pairs that list the same lights in the same order, so combining one means
+        // combining its partner too, even if the partner doesn't clash.
+        foreach (var merge in requests.Where(m => LightsMerge.IsLights(m.Base.FileName)).ToList())
         {
+            if (Partner(merge.Base) is not { } partner ||
+                requests.Any(r => r.Base.FileName.Equals(partner.FileName, StringComparison.OrdinalIgnoreCase))) continue;
+            requests.Add(new MergeRequest(partner, merge.Copies.Select(Partner).OfType<StreamFile>().ToList()));
+        }
+        foreach (var merge in requests)
+        {
+            // Always made from the maps' own copies, never from an earlier combined one.
+            var sources = merge.Copies.Where(c => !IsOurs(c.Resource)).ToList();
             MergedFile result;
             try
             {
-                result = OcclusionMerge.Merge(merge.Base.FullPath,
-                    merge.Copies.Where(c => c != merge.Base).Select(c => c.FullPath).ToList());
+                result = FileMerge.Merge(merge.Base.FullPath, sources.Where(c => c != merge.Base).Select(c => c.FullPath).ToList());
             }
             catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
             {
@@ -99,10 +121,12 @@ public static class Resolver
             // Combining again (say another map with this file was added): the old combined one goes to the backup.
             var path = Path.Combine(fixFolder, "stream", merge.Base.FileName);
             if (File.Exists(path)) moves.Add(Move(FixResourceName, path));
-            var maps = merge.Copies.Select(c => c.Resource.Name)
-                .Where(n => !n.Equals(FixResourceName, StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            summaries.Add(new MergeSummary(merge.Base.FileName, maps, result, path));
+            var maps = sources.Select(c => c.Resource.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            summaries.Add(new MergeSummary(merge.Base.FileName, maps, result, path)
+            {
+                Sources = sources.Select(c => new CombinedSource(c.Resource.Name, Path.GetRelativePath(resourcesFolder, c.FullPath),
+                    FingerprintOf(c.FullPath) ?? throw new FixException($"Map Doctor can't read {c.FullPath}, so nothing was changed."))).ToList(),
+            });
         }
 
         moves.AddRange(filesToMove
@@ -112,9 +136,19 @@ public static class Resolver
         return new FixPlan(folder, moves) { Merges = summaries, FixFolder = fixFolder, StartList = startList };
     }
 
+    private static StreamFile? Partner(StreamFile file)
+    {
+        var partner = LightsMerge.Partner(file.FullPath);
+        return file.Resource.StreamFiles.FirstOrDefault(s =>
+            s.FileName.Equals(Path.GetFileName(partner), StringComparison.OrdinalIgnoreCase) &&
+            Path.GetDirectoryName(s.FullPath) == Path.GetDirectoryName(partner));
+    }
+
     public static string Fingerprint(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 
-    private static string? FingerprintOf(string path)
+    public static bool IsOurs(ResourceInfo resource) => resource.Name.Equals(FixResourceName, StringComparison.OrdinalIgnoreCase);
+
+    internal static string? FingerprintOf(string path)
     {
         try { return File.Exists(path) ? Fingerprint(File.ReadAllBytes(path)) : null; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
@@ -129,7 +163,7 @@ public static class Resolver
 
         var record = new FixRecord(now, plan.BackupFolder, plan.Moves)
         {
-            Combined = plan.Merges.Select(m => new CombinedFile(m.FileName, m.Path, Fingerprint(m.Result.Bytes), m.Maps)).ToList(),
+            Combined = plan.Merges.Select(m => new CombinedFile(m.FileName, m.Path, Fingerprint(m.Result.Bytes), m.Maps) { Sources = m.Sources }).ToList(),
             StartList = plan.Merges.Count > 0 ? plan.StartList : null,
         };
 
@@ -170,7 +204,7 @@ public static class Resolver
             {
                 Directory.CreateDirectory(Path.Combine(plan.FixFolder, "stream"));
                 var manifest = Path.Combine(plan.FixFolder, "fxmanifest.lua");
-                if (!File.Exists(manifest)) File.WriteAllText(manifest, Manifest);
+                File.WriteAllText(manifest, Manifest);
                 foreach (var merge in plan.Merges)
                 {
                     using (var file = new FileStream(merge.Path, FileMode.CreateNew, FileAccess.Write))
@@ -418,7 +452,14 @@ public static class Resolver
                 // The fix resource is always in the same place, so only the file name is trusted.
                 var combined = (saved.Combined ?? [])
                     .Where(c => c.FileName == Path.GetFileName(c.FileName))
-                    .Select(c => c with { Path = Path.Combine(FixFolder(resourcesFolder), "stream", c.FileName) })
+                    .Select(c => c with
+                    {
+                        Path = Path.GetFullPath(Path.Combine(FixFolder(resourcesFolder), "stream", c.FileName)),
+                        Sources = (c.Sources ?? [])
+                            .Select(s => s with { Path = Path.GetFullPath(Path.Combine(resourcesFolder, s.Path)) })
+                            .Where(s => IsInside(s.Path, resourcesFolder))
+                            .ToList(),
+                    })
                     .ToList();
 
                 // A fix that stopped half way: only the files that actually reached the backup need putting back.
