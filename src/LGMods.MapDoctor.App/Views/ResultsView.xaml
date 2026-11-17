@@ -517,25 +517,26 @@
                 </TextBox.InputBindings>
             </TextBox>
 
-            <Border Grid.Column="2" Style="{StaticResource SegmentGroup}">
+            <!-- The map list always shows every map, so filtering is only for the clash list -->
+            <Border Grid.Column="2" Style="{StaticResource SegmentGroup}" Visibility="{Binding IsClashView, Converter={StaticResource BoolToVisibility}}">
                 <StackPanel Orientation="Horizontal">
                     <RadioButton Style="{StaticResource Segment}" GroupName="filter" IsChecked="{Binding ShowProblems}">
                         <StackPanel Orientation="Horizontal">
                             <Ellipse Width="6" Height="6" Fill="{StaticResource ProblemBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding ProblemsLabel}" />
-                            <TextBlock Text="{Binding ProblemsCount}" Foreground="{StaticResource Muted2Brush}" Margin="7,0,0,0" />
+                            <TextBlock Text="To fix" />
+                            <TextBlock Text="{Binding ProblemCount}" Foreground="{StaticResource Muted2Brush}" Margin="7,0,0,0" />
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource Segment}" GroupName="filter" IsChecked="{Binding ShowWarnings}">
                         <StackPanel Orientation="Horizontal">
                             <Ellipse Width="6" Height="6" Fill="{StaticResource WarningBrush}" Margin="0,0,8,0" VerticalAlignment="Center" />
                             <TextBlock Text="Worth checking" />
-                            <TextBlock Text="{Binding WarningsCount}" Foreground="{StaticResource Muted2Brush}" Margin="7,0,0,0" />
+                            <TextBlock Text="{Binding WarningCount}" Foreground="{StaticResource Muted2Brush}" Margin="7,0,0,0" />
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource Segment}" GroupName="filter" IsChecked="{Binding ShowAll}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding AllLabel}" />
+                            <TextBlock Text="Everything" />
                             <TextBlock Text="{Binding AllCount}" Foreground="{StaticResource Muted2Brush}" Margin="7,0,0,0" />
                         </StackPanel>
                     </RadioButton>
@@ -589,7 +590,7 @@
                         <Button Style="{StaticResource LinkButton}" FontSize="13" Command="{Binding ShowEverythingCommand}" HorizontalAlignment="Left" Margin="0,6,0,0"
                                 Visibility="{Binding CanShowEverything, Converter={StaticResource BoolToVisibility}}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="{Binding ShowEverythingLabel}" />
+                                <TextBlock Text="Show everything" />
                                 <TextBlock Style="{StaticResource Icon}" FontSize="10" Text="&#xE76C;" Margin="6,1,0,0" />
                             </StackPanel>
                         </Button>

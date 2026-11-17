@@ -113,11 +113,7 @@ public sealed class ResultsViewModel : ObservableObject
     public bool ShowWarnings { get => _filter == ResultsFilter.Warnings; set { if (value) SetFilter(ResultsFilter.Warnings); } }
     public bool ShowAll { get => _filter == ResultsFilter.All; set { if (value) SetFilter(ResultsFilter.All); } }
 
-    public string ProblemsLabel => IsMapView ? "Needs fixing" : "To fix";
-    public int ProblemsCount => IsMapView ? MapProblemCount : ProblemCount;
-    public int WarningsCount => IsMapView ? MapWarningCount : WarningCount;
-    public string AllLabel => IsMapView ? "All maps" : "Everything";
-    public int AllCount => IsMapView ? Maps.Count : Findings.Count;
+    public int AllCount => Findings.Count;
 
     public string Search
     {
@@ -135,8 +131,7 @@ public sealed class ResultsViewModel : ObservableObject
         set
         {
             if (!Set(ref _isMapView, value)) return;
-            RaiseAll(nameof(IsClashView), nameof(Detail), nameof(SearchHint), nameof(ProblemsLabel), nameof(ProblemsCount),
-                nameof(WarningsCount), nameof(AllLabel), nameof(AllCount));
+            RaiseAll(nameof(IsClashView), nameof(Detail), nameof(SearchHint));
             RaiseEmptyState();
         }
     }
@@ -160,27 +155,25 @@ public sealed class ResultsViewModel : ObservableObject
     public object? Detail => IsMapView ? SelectedMap : Selected;
 
     public bool ListIsEmpty => IsMapView ? MapsView.IsEmpty : FindingsView.IsEmpty;
-    public bool CanShowEverything => ListIsEmpty && _filter != ResultsFilter.All && HasMatchesAnywhere;
-    public string ShowEverythingLabel => IsMapView ? "Show all maps" : "Show everything";
+    public bool CanShowEverything => IsClashView && ListIsEmpty && _filter != ResultsFilter.All && HasMatchesAnywhere;
 
     public string EmptyListText
     {
         get
         {
             var q = Search.Trim();
-            var what = (IsMapView, _filter) switch
+            if (IsMapView) return q.Length > 0 ? $"Nothing matches \"{q}\"." : "No maps found.";
+            var what = _filter switch
             {
-                (true, ResultsFilter.Problems) => "maps that need fixing",
-                (true, ResultsFilter.Warnings) => "maps worth checking",
-                (false, ResultsFilter.Problems) => "clashes to fix",
-                (false, ResultsFilter.Warnings) => "things worth checking",
+                ResultsFilter.Problems => "clashes to fix",
+                ResultsFilter.Warnings => "things worth checking",
                 _ => "results",
             };
             if (q.Length > 0)
                 return _filter != ResultsFilter.All && HasMatchesAnywhere
                     ? $"None of the {what} match \"{q}\"."
                     : $"Nothing matches \"{q}\".";
-            return _filter == ResultsFilter.Problems && IsMapView ? "No maps need fixing. Nice." : $"No {what}.";
+            return $"No {what}.";
         }
     }
 
@@ -290,7 +283,6 @@ public sealed class ResultsViewModel : ObservableObject
         if (map is null) return;
         IsMapView = true;
         Search = "";
-        if (!ShowMap(map)) SetFilter(ResultsFilter.All);
         SelectedMap = map;
     }
 
@@ -307,8 +299,7 @@ public sealed class ResultsViewModel : ObservableObject
         _settings.SetFine(Folder, finding.Finding.Key, fine);
         foreach (var map in Maps) map.Refresh();
         RaiseAll(nameof(ProblemCount), nameof(WarningCount), nameof(MapProblemCount), nameof(MapWarningCount),
-            nameof(HeadlineNumber), nameof(HeadlineRest), nameof(HeadlineBrush), nameof(Subline),
-            nameof(ProblemsCount), nameof(WarningsCount));
+            nameof(HeadlineNumber), nameof(HeadlineRest), nameof(HeadlineBrush), nameof(Subline));
     }
 
     private void SetFilter(ResultsFilter filter)
@@ -335,7 +326,7 @@ public sealed class ResultsViewModel : ObservableObject
     }
 
     private void RaiseEmptyState() =>
-        RaiseAll(nameof(ListIsEmpty), nameof(EmptyListText), nameof(CanShowEverything), nameof(ShowEverythingLabel));
+        RaiseAll(nameof(ListIsEmpty), nameof(EmptyListText), nameof(CanShowEverything));
 
     private void RaiseAll(params string[] names)
     {
@@ -352,10 +343,9 @@ public sealed class ResultsViewModel : ObservableObject
     private bool ShowFinding(FindingViewModel f) =>
         PassesFilter(f.IsFine ? null : f.Severity) && f.Matches(Search.Trim());
 
-    // LG Mods maps are listed at the top of the start view ("Needs fixing") even when they're fine, so buyers find
-    // theirs straight away. "Worth checking" only shows maps that really are worth checking.
-    private bool ShowMap(MapViewModel m) =>
-        (PassesFilter(m.Status) || (m.IsLgMods && _filter == ResultsFilter.Problems)) && m.Matches(Search.Trim());
+    // Every map is always listed, grouped by how it's doing, with LG Mods maps at the top so buyers find theirs
+    // straight away. Only searching narrows it down.
+    private bool ShowMap(MapViewModel m) => m.Matches(Search.Trim());
 
     private List<MapViewModel> BuildMaps()
     {
