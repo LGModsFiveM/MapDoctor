@@ -95,6 +95,28 @@ Join the [LGMods Discord](https://discord.gg/lgmods). The **Copy for support** b
 everything we need to help you. If a clash needs the map makers to sort out, **Message map makers**
 writes the message for you.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+Every release is built from this repository by GitHub Actions and signed only once a maintainer
+approves it.
+
+| Role | Who |
+|---|---|
+| Authors | [OfficerGalvin](https://github.com/OfficerGalvin) |
+| Reviewers | [OfficerGalvin](https://github.com/OfficerGalvin) |
+| Approvers | [OfficerGalvin](https://github.com/OfficerGalvin) |
+
+Privacy: this program will not transfer any information to other networked systems unless
+specifically requested by the user or the person installing or operating it.
+
+## Licence
+
+Map Doctor is open source under the [MIT licence](LICENSE). The LGMods name and logo are not covered
+by the licence.
+
 <p align="center">
   <br>
   <img src="src/LGMods.MapDoctor.App/Assets/logo.png" alt="LGMods" height="48"><br>
