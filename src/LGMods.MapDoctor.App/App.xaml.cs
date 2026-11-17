@@ -94,7 +94,8 @@ public partial class App : Application
                 Save(window, Path.Combine(outDir, "7-resolve-choose.png"));
                 if (main.Dialog is ResolveViewModel open && open.Groups.FirstOrDefault(g => g.Resources.Count > 2) is { } group)
                 {
-                    group.ShowFiles = true;
+                    group.ShowDetails = true;
+                    open.ShowHowItWorks = true;
                     group.Files[0].Select(group.Files[0].Options[^1]);
                     window.Height = 1500;
                     Save(window, Path.Combine(outDir, "7b-resolve-expanded.png"));
@@ -102,7 +103,8 @@ public partial class App : Application
                     window.Height = 720;
                     Save(window, Path.Combine(outDir, "7c-resolve-small.png"));
                     if (group.CanMerge) group.Merge = true; else group.ChooseAll(open.Focus);
-                    group.ShowFiles = false;
+                    group.ShowDetails = false;
+                    open.ShowHowItWorks = false;
                     window.Width = 1280;
                     window.Height = 860;
                 }
@@ -119,6 +121,9 @@ public partial class App : Application
                 {
                     dialog.NextCommand.Execute(null);
                     Save(window, Path.Combine(outDir, "8-resolve-confirm.png"));
+                    dialog.ShowConfirmDetails = true;
+                    Save(window, Path.Combine(outDir, "8b-resolve-confirm-details.png"));
+                    dialog.ShowConfirmDetails = false;
 
                     if (tryFix)
                     {

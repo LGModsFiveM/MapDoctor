@@ -19,6 +19,8 @@ public sealed class ResolveViewModel : ObservableObject
     private string? _error;
     private FixPlan? _plan;
     private bool _addStartLine = true;
+    private bool _showHowItWorks;
+    private bool _showConfirmDetails;
 
     public ResolveViewModel(ResultsViewModel owner, IReadOnlyList<FindingViewModel> clashes, ResourceInfo? focus)
     {
@@ -29,18 +31,21 @@ public sealed class ResolveViewModel : ObservableObject
         Title = focus is not null ? $"Fix clashes for {focus.Name}" : "Fix this clash";
         var root = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(owner.Result.ResourcesFolder)) ?? "";
         var backupFolder = Path.Combine(Path.GetFileName(root), "mapdoctor-backups");
-        var howItWorks = new List<string>
+        var canMerge = Groups.Any(g => g.CanMerge);
+        Intro = canMerge
+            ? "Pick which map shows for each clash, or combine them so every map works. Nothing is deleted."
+            : "Pick which map shows for each clash. Nothing is deleted, and you can undo it any time.";
+        var howItWorks = new List<HowStep>
         {
-            "Two maps can't both change the same part of the GTA world. When they do, only one shows and the other is hidden.",
-            focus is not null
-                ? $"For each clash, pick which map should show. We've picked {focus.Name} where it's hidden right now."
-                : "Pick which map should show. Usually that's the one players visit most, or the one you just bought.",
-            $"We move the other maps' copies of those files into {backupFolder} (next to server.cfg). Nothing is deleted, and you can undo it any time.",
+            new("\uE8AB", "One map per spot", "When two maps change the same part of the world, only one of them can show."),
+            new("\uE73E", "Pick who shows", focus is not null
+                ? $"We've picked {focus.Name} wherever it's hidden right now."
+                : "Usually the one players visit most, or the one you just bought."),
+            new("\uE7A7", "Undo any time", $"Copies taken out go to {backupFolder}, next to server.cfg. Nothing is deleted."),
         };
-        if (Groups.Any(g => g.CanMerge))
-            howItWorks.Insert(2,
-                "Some clashes can be combined instead, so every map works and nothing is hidden. The combined files go in their own " +
-                $"resource, {Resolver.FixResourceName}, so your maps aren't changed. We've picked that wherever it's possible.");
+        if (canMerge)
+            howItWorks.Insert(2, new("\uE71B", "Or combine them",
+                $"Every map works. Combined files go in {Resolver.FixResourceName}, so your maps aren't changed."));
         HowItWorks = howItWorks;
 
         CancelCommand = new RelayCommand(owner.CloseDialog);
@@ -55,8 +60,21 @@ public sealed class ResolveViewModel : ObservableObject
     public bool HasFocus => Focus is not null;
     public string FocusName => Focus?.Name ?? "";
     public string Title { get; }
-    public IReadOnlyList<string> HowItWorks { get; }
+    public string Intro { get; }
+    public IReadOnlyList<HowStep> HowItWorks { get; }
     public IReadOnlyList<ResolveGroup> Groups { get; }
+
+    public bool ShowHowItWorks
+    {
+        get => _showHowItWorks;
+        set => Set(ref _showHowItWorks, value);
+    }
+
+    public bool ShowConfirmDetails
+    {
+        get => _showConfirmDetails;
+        set => Set(ref _showConfirmDetails, value);
+    }
 
     public bool IsChoosing => !IsConfirming;
 
@@ -134,12 +152,9 @@ public sealed class ResolveViewModel : ObservableObject
 
     public string ConfirmText => (PlannedMerges > 0, PlannedMoves > 0) switch
     {
-        (true, _) => $"Combined files go in Map Doctor's own resource, {Resolver.FixResourceName}, which starts after your maps so its " +
-                     "versions are the ones players get. Your maps aren't changed, and nothing is deleted.",
-        (false, true) => "These copies will be taken out of your resources so the versions you chose are the only ones left. " +
-                         "The versions you keep aren't touched, and nothing is deleted.",
-        _ => "No files will be moved. These clashes will be marked as fine, so they stop showing as problems. " +
-             "You can unmark them any time.",
+        (true, _) => "Your maps aren't changed, and you can undo it any time.",
+        (false, true) => "Nothing is deleted: the copies go to a backup folder, and you can undo it any time.",
+        _ => "No files change. These clashes are marked as fine, so they stop showing as problems.",
     };
 
     // Anything going to the backup folder (moved copies, or originals of combined files).
@@ -166,7 +181,7 @@ public sealed class ResolveViewModel : ObservableObject
     public string? StartLineNote => !HasMerges ? null
         : FixIsRunning ? $"{Resolver.FixResourceName} already starts from your server.cfg, so the combined files load straight away."
         : _owner.Result.StartListFile is null ? $"We couldn't find your server.cfg. Add \"{Resolver.StartLine}\" as its last line, or the combined files won't load."
-        : $"{Resolver.FixResourceName} has to start after your maps, so it needs a line at the end of your server.cfg.";
+        : $"{Resolver.FixResourceName} has to start after your maps:";
     public bool HasStartLineNote => StartLineNote is not null;
 
     public IReadOnlyList<string> Ignoring { get; private set; } = [];
@@ -281,12 +296,12 @@ public sealed class ResolveViewModel : ObservableObject
 
     internal static string KeptText(MergedFile m) =>
         m.Total == 0 || m.Kept == m.Total
-            ? "Nothing lost: every map already agreed here"
+            ? "Nothing lost: every map already agreed here."
             : m.Kept == 0
-                ? $"These maps' versions have nothing in common, so none of the {m.Total} hiding spots are kept. Nothing vanishes, but frame rate nearby may dip slightly"
+                ? $"The maps share none of their {m.Total} hiding spots, so none are kept. Nothing vanishes, but GTA draws more here."
             : m.Kept * 2 >= m.Total
-                ? $"Keeps {m.Kept} of {m.Total} hiding spots, so GTA draws a tiny bit more here"
-                : $"The maps disagree a lot here, so only {m.Kept} of {m.Total} hiding spots are kept. Nothing vanishes, but frame rate nearby may dip slightly";
+                ? $"Keeps {m.Kept} of {m.Total} hiding spots, so GTA draws a little more here."
+                : $"Only {m.Kept} of {m.Total} hiding spots are shared, so only those are kept. Nothing vanishes, but GTA draws more here.";
 
     private void Apply()
     {
@@ -319,7 +334,7 @@ public sealed class ResolveGroup : ObservableObject
     private readonly ResolveViewModel _dialog;
     private readonly ResourceInfo? _focus;
     private readonly string _symptom;
-    private bool _showFiles;
+    private bool _showDetails;
     private bool _ignore;
 
     public ResolveGroup(FindingViewModel finding, ResourceInfo? focus, ScanResult result, ResolveViewModel dialog)
@@ -382,14 +397,13 @@ public sealed class ResolveGroup : ObservableObject
     public System.Windows.Media.Brush DotBrush { get; }
     public string With { get; }
 
-    public string FilesLabel => ShowFiles
-        ? "Hide the files"
-        : Files.Count == 1 ? "Show the file" : $"Show the {Files.Count} files (choose one by one)";
+    public string DetailsLabel => ShowDetails ? "Hide details"
+        : Files.Count == 1 ? "Details" : $"Details, or choose file by file";
 
-    public bool ShowFiles
+    public bool ShowDetails
     {
-        get => _showFiles;
-        set { if (Set(ref _showFiles, value)) OnPropertyChanged(nameof(FilesLabel)); }
+        get => _showDetails;
+        set { if (Set(ref _showDetails, value)) OnPropertyChanged(nameof(DetailsLabel)); }
     }
 
     // The map every file agrees on, or null when files were chosen one by one differently.
@@ -426,36 +440,51 @@ public sealed class ResolveGroup : ObservableObject
         }
     }
 
-    public string Effect
+    // One line on what the choice does; Effect explains it under "Details".
+    public string Summary
     {
         get
         {
             var moving = Files.SelectMany(f => f.FilesToMove()).ToList();
             var merging = Files.Where(f => f.Choice.IsMerge).ToList();
-            if (_ignore)
-                return "Nothing moves. This clash is marked as fine, so it stops showing as a problem. You can unmark it any time.";
+            if (_ignore) return "Ignored. Nothing changes.";
             if (merging.Count > 0)
+                return $"Combines {(merging.Count == 1 ? merging[0].FileName : Plain.Count(merging.Count, "file"))} so " +
+                       $"{(Resources.Count == 2 ? "both maps" : $"all {Resources.Count} maps")} work.";
+            if (moving.Count == 0)
+                return _focus is not null && Winner == _focus
+                    ? $"Nothing changes. {_focus.Name} already shows here."
+                    : $"Nothing changes. {Winner.Name} keeps showing here.";
+            return Selected is { } pick
+                ? $"{pick.Name} will show here."
+                : $"Chosen file by file: {Plain.Count(moving.Count, "file")} {(moving.Count == 1 ? "moves" : "move")} to the backup.";
+        }
+    }
+
+    public string Effect
+    {
+        get
+        {
+            var moving = Files.SelectMany(f => f.FilesToMove()).ToList();
+            var from = Plain.JoinAndShort(moving.Select(m => m.Resource.Name).Distinct().ToList());
+            if (_ignore)
+                return "No files change. This clash is marked as fine, so it stops showing as a problem. You can unmark it any time.";
+            if (Files.Any(f => f.Choice.IsMerge))
             {
-                var all = Resources.Count == 2 ? "both maps" : $"all {Resources.Count} maps";
-                var text = $"Combines {(merging.Count == 1 ? merging[0].FileName : Plain.Count(merging.Count, "file"))} so {all} work: " +
-                           "only the hiding spots every map agrees on are kept, so none of their buildings vanish. " +
+                var text = "Only the hiding spots every map agrees on are kept, so none of their buildings vanish. " +
                            $"The combined version goes in {Resolver.FixResourceName}, so the maps themselves aren't changed.";
-                if (moving.Count > 0)
-                    text += $" Also moves {Plain.Count(moving.Count, "file")} out of {Plain.JoinAndShort(moving.Select(m => m.Resource.Name).Distinct().ToList())}.";
+                if (moving.Count > 0) text += $" Also moves {Plain.Count(moving.Count, "file")} out of {from}.";
                 var left = Files.Count(f => !f.IsChanged);
                 if (left > 0) text += $" {Plain.Count(left, "other file")} can't be combined and {(left == 1 ? "stays" : "stay")} as {(left == 1 ? "it is" : "they are")}.";
                 return text;
             }
-            if (moving.Count == 0)
-            {
-                if (_focus is not null && Winner == _focus) return $"Nothing moves. {_focus.Name} already shows here.";
-                return $"Nothing moves. {Winner.Name} keeps showing here.";
-            }
-            var from = moving.Select(m => m.Resource.Name).Distinct().ToList();
-            var start = IsMixed ? "Chosen file by file: moves " : "Moves ";
-            return $"{start}{Plain.Count(moving.Count, "file")} out of {Plain.JoinAndShort(from)} into the backup folder.";
+            if (moving.Count == 0) return "";
+            return $"Moves {Plain.Count(moving.Count, "file")} out of {from} into the backup folder next to server.cfg. " +
+                   "Nothing is deleted, and you can undo it any time.";
         }
     }
+
+    public bool HasEffect => Effect.Length > 0;
 
     public string TradeOff
     {
@@ -468,8 +497,8 @@ public sealed class ResolveGroup : ObservableObject
                 var kept = merged.Sum(m => m.Kept);
                 var total = merged.Sum(m => m.Total);
                 return kept * 2 >= total
-                    ? "Trade-off: hardly any. GTA may draw a tiny bit more around here."
-                    : "Trade-off: these maps disagree a lot here, so GTA will draw more around them. Nothing vanishes, but frame rate nearby may dip slightly.";
+                    ? "Trade-off: GTA draws a little more around here."
+                    : "Trade-off: GTA draws more around here than before, because these maps share few hiding spots.";
             }
             if (moving.Count == 0)
             {
@@ -500,7 +529,7 @@ public sealed class ResolveGroup : ObservableObject
     internal void ChoiceChanged()
     {
         foreach (var o in Options) o.Changed();
-        foreach (var name in new[] { nameof(Selected), nameof(IsMixed), nameof(IsChanged), nameof(Effect), nameof(TradeOff), nameof(HasTradeOff), nameof(Ignore), nameof(Merge) })
+        foreach (var name in new[] { nameof(Selected), nameof(IsMixed), nameof(IsChanged), nameof(Summary), nameof(Effect), nameof(HasEffect), nameof(TradeOff), nameof(HasTradeOff), nameof(Ignore), nameof(Merge) })
             OnPropertyChanged(name);
         _dialog.ChoiceChanged();
     }
@@ -641,6 +670,7 @@ public sealed record MoveGroup(string Name, bool IsFocus, bool IsLocked, string 
 }
 public sealed record MoveLine(string FileName, string Path);
 public sealed record MergeLine(string FileName, string Maps, string Kept);
+public sealed record HowStep(string Icon, string Title, string Text);
 public sealed record PastFileLine(string FileName, string Where);
 
 public sealed class FixNotice : ObservableObject
